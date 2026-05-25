@@ -46,6 +46,7 @@ export default function Scanner({ onScan, onBack }) {
   const canvasRef      = useRef(null);
   const fileInputRef   = useRef(null);
   const chatRef        = useRef(null);
+  const chatEndRef     = useRef(null);
   const streamRef      = useRef(null);
   const readerRef      = useRef(null);
   const startingRef    = useRef(false);
@@ -56,14 +57,23 @@ export default function Scanner({ onScan, onBack }) {
   const showErr  = (msg) => setError(msg);
   const clearErr = () => setError("");
 
-  const scrollBottom = () =>
+  const scrollBottom = (behavior = "smooth") => {
     requestAnimationFrame(() => {
-      if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+      requestAnimationFrame(() => {
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior, block: "end" });
+          return;
+        }
+        if (chatRef.current) {
+          chatRef.current.scrollTo({ top: chatRef.current.scrollHeight, behavior });
+        }
+      });
     });
+  };
 
   // ── effects ────────────────────────────────────────────────────────────────
   useEffect(() => { return () => stopCamera(); }, []);
-  useEffect(() => { scrollBottom(); }, [messages]);
+  useEffect(() => { scrollBottom(messages.length > 1 ? "smooth" : "auto"); }, [messages]);
   useEffect(() => {
     if (!loading) return;
     const t = setInterval(() => setAiStep(p => (p + 1) % AI_STEPS.length), 900);
@@ -296,6 +306,7 @@ export default function Scanner({ onScan, onBack }) {
       ...(cd  ? [{ id: mkId(), type: "user", content: `Scanned code: ${cd}` }] : []),
       { id: ldId, type: "assistant", loading: true },
     ]);
+    scrollBottom();
 
     setTimeout(() => {
       const result = buildMockAnalysis(cd || img);
@@ -304,6 +315,7 @@ export default function Scanner({ onScan, onBack }) {
         { id: mkId(), type: "assistant", result },
       ]);
       setLoading(false);
+      scrollBottom();
       if (onScan) onScan(result);
     }, 3200);
   };
@@ -318,6 +330,7 @@ export default function Scanner({ onScan, onBack }) {
 
   // ── RENDER ─────────────────────────────────────────────────────────────────
   const canSend = (!!preview || !!scannedCode) && !loading;
+  const isInitialState = messages.length === 1 && !preview && !scannedCode && !loading;
 
   return (
     <div className="min-h-dvh overflow-x-hidden bg-[#050816] text-white flex flex-col">
@@ -359,7 +372,10 @@ export default function Scanner({ onScan, onBack }) {
       <div className="relative z-10 flex-1 max-w-5xl w-full mx-auto px-3 sm:px-4 py-4 flex flex-col">
 
         {/* ── chat scroll area ── */}
-        <div ref={chatRef} className="flex-1 overflow-y-auto space-y-4 pb-52">
+        <div
+          ref={chatRef}
+          className={`flex-1 overflow-y-auto space-y-4 ${isInitialState ? "flex flex-col justify-center pb-6" : "pb-52"}`}
+        >
 
           {/* error banner */}
           <AnimatePresence>
@@ -423,11 +439,17 @@ export default function Scanner({ onScan, onBack }) {
               </motion.div>
             ))}
           </AnimatePresence>
+          <div ref={chatEndRef} />
 
         </div>{/* end chat scroll */}
 
         {/* ── fixed input bar ── */}
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#050816]/85 backdrop-blur-3xl">
+        <div
+          className={isInitialState
+            ? "mt-6 w-full max-w-3xl mx-auto"
+            : "fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#050816]/85 backdrop-blur-3xl"
+          }
+        >
           <div className="max-w-5xl mx-auto px-3 sm:px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
 
             {/* image preview thumbnail */}
