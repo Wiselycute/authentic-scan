@@ -2,10 +2,17 @@
 
 import React from "react";
 import { motion } from "framer-motion";
+import { usePathname } from "next/navigation";
 
 const PARTICLE_COUNT = 30;
 
 export default function FloatingParticles() {
+  const pathname = usePathname();
+
+  if (pathname?.startsWith("/scanner")) {
+    return null;
+  }
+
   return (
     <div className="fixed inset-0 z-20 pointer-events-none overflow-hidden" aria-hidden="true">
       {Array.from({ length: PARTICLE_COUNT }).map((_, i) => (
