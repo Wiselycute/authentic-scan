@@ -100,6 +100,18 @@ const formatHttpError = (response, payload) => {
     return `HTTP error! status: ${response.status}`;
 };
 
+const formatNetworkError = (error) => {
+    const rawMessage = (error?.message || "").toLowerCase();
+
+    // Browsers usually throw TypeError('Failed to fetch') when the server is unreachable,
+    // CORS preflight fails, DNS lookup fails, or TLS handshake fails.
+    if (rawMessage.includes("failed to fetch") || rawMessage.includes("networkerror")) {
+        return "Unable to reach the backend API. The server may be down or temporarily unreachable.";
+    }
+
+    return error?.message || "A network error occurred while contacting the API.";
+};
+
 const getAuthToken = () => {
     if (typeof window === 'undefined') {
         return null;
@@ -186,7 +198,7 @@ export const request = async (path, data = null, method = "GET") => {
         console.error('Request Error:', error);
         return { 
             error: true,
-            message: error.message || "An error occurred",
+            message: formatNetworkError(error),
             data: null
         };
     }
@@ -250,7 +262,7 @@ export const requestForm = async (path, formData, method = "POST") => {
         console.error('Form Request Error:', error);
         return {
             error: true,
-            message: error.message || 'An error occurred',
+            message: formatNetworkError(error),
             data: null,
         };
     }
