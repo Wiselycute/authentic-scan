@@ -1,7 +1,7 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import "./register/page";
 import FloatingParticles from "@/components/FloatingParticles";
+import { AuthProvider } from "@/utils/contexts/AuthContext";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,8 +25,10 @@ export default function RootLayout({ children }) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col relative bg-[#050816] text-white overflow-x-hidden">
-        <FloatingParticles />
-        <div className="relative z-10 flex min-h-full flex-col">{children}</div>
+        <AuthProvider>
+          <FloatingParticles />
+          <div className="relative z-10 flex min-h-full flex-col">{children}</div>
+        </AuthProvider>
       </body>
     </html>
   );

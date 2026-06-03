@@ -2,10 +2,28 @@
 import React from "react";
 import { useState } from "react";
 import Link from "next/link";
-import { Shield, Menu, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Shield, Menu, X, LogOut } from "lucide-react";
+import { useAuth } from "@/utils/contexts/AuthContext";
 
 export const Navbar = () => {
+    const router = useRouter();
+    const { user, isLogin, logout } = useAuth();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+    const role = String(user?.role || "").toLowerCase();
+    const isAdmin = role === "admin";
+    const userName = user?.fullName || user?.name || user?.username || user?.email || "User";
+    const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
+
+    const handleLogout = () => {
+      logout();
+      setProfileMenuOpen(false);
+      setMobileMenuOpen(false);
+      router.push("/login");
+    };
+
    return (
     <nav className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-black/20 border-b border-white/10">
       <div className="max-w-7xl mx-auto px-6">
@@ -46,11 +64,20 @@ export const Navbar = () => {
             </a>
 
             <Link
-              href="/dashboard"
+              href="/brand"
               className="text-sm text-white/70 hover:text-white transition-colors"
             >
-              Dashboard
+              Brand
             </Link>
+
+            {isAdmin && (
+              <Link
+                href="/dashboard"
+                className="text-sm text-white/70 hover:text-white transition-colors"
+              >
+                Dashboard
+              </Link>
+            )}
 
             <Link
               href="/scanner"
@@ -58,6 +85,35 @@ export const Navbar = () => {
             >
               Scan Product
             </Link>
+
+            {isLogin ? (
+              <div className="relative">
+                <button
+                  onClick={() => setProfileMenuOpen((prev) => !prev)}
+                  className="h-10 w-10 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-white font-semibold flex items-center justify-center shadow-lg shadow-cyan-500/25"
+                  aria-label="Open profile menu"
+                >
+                  {userInitial}
+                </button>
+
+                {profileMenuOpen && (
+                  <div className="absolute right-0 mt-3 w-52 rounded-2xl border border-white/10 bg-[#0b1229]/95 backdrop-blur-xl p-2 shadow-2xl">
+                    <div className="px-3 py-2 border-b border-white/10">
+                      <p className="text-sm text-white font-medium truncate">{userName}</p>
+                      <p className="text-xs text-white/50 capitalize">{role || "user"}</p>
+                    </div>
+
+                    <button
+                      onClick={handleLogout}
+                      className="mt-1 w-full px-3 py-2.5 rounded-xl text-left text-sm text-rose-200 hover:bg-rose-500/15 transition flex items-center gap-2"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
 
           {/* Mobile Menu Button */}
@@ -101,20 +157,39 @@ export const Navbar = () => {
             </a>
 
             <Link
-              href="/dashboard"
+              href="/brand"
               onClick={() => setMobileMenuOpen(false)}
-              className="block w-full text-left text-white/70 hover:text-white transition-colors"
+              className="block text-white/70 hover:text-white transition-colors"
             >
-              Dashboard
+              Brand
             </Link>
+
+            {isAdmin && (
+              <Link
+                href="/dashboard"
+                onClick={() => setMobileMenuOpen(false)}
+                className="block w-full text-left text-white/70 hover:text-white transition-colors"
+              >
+                Dashboard
+              </Link>
+            )}
 
             <Link
               href="/scanner"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-full px-6 py-3 bg-linear-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-xl font-medium transition-all"
+              className="w-full px-6 py-3 bg-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-xl font-medium transition-all"
             >
               Scan Product
             </Link>
+
+            {isLogin ? (
+              <button
+                onClick={handleLogout}
+                className="w-full px-4 py-3 rounded-xl border border-rose-400/20 bg-rose-500/10 text-rose-200 text-left"
+              >
+                Logout
+              </button>
+            ) : null}
           </div>
         </div>
       )}

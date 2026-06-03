@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ShieldCheck,
   Mail,
@@ -11,9 +12,42 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { request } from "@/app/api/services/base.service";
+import { useAuth } from "@/utils/contexts/AuthContext";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { setUser, setIsLogin } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+
+    const result = await request("/auth/login", { email, password }, "POST");
+
+    if (result.error) {
+      setError(result.message || "Unable to log in");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const token = result.data?.token;
+    const user = result.data?.user || {};
+
+    localStorage.setItem("user", JSON.stringify({ token, role: user.role, ...user }));
+    setUser({ token, ...user });
+    setIsLogin(true);
+    setIsSubmitting(false);
+
+    const role = String(user.role || "").toLowerCase();
+    router.push(role === "admin" ? "/dashboard" : "/scanner");
+  };
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-[#02071F] flex items-center justify-center px-6 py-16">
@@ -39,7 +73,7 @@ export default function LoginPage() {
 
           <div className="relative z-10">
             <div className="mb-8 flex items-center gap-3">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-400  shadow-[0_0_25px_rgba(34,211,238,0.45)]">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-600  shadow-[0_0_25px_rgba(34,211,238,0.45)]">
                 <ShieldCheck className="h-7 w-7 text-white" />
               </div>
 
@@ -99,7 +133,7 @@ export default function LoginPage() {
               <p className="text-slate-400">Login to continue verifying products securely.</p>
             </div>
 
-            <form className="space-y-4">
+            <form className="space-y-4" onSubmit={handleSubmit}>
               <div>
                 <label className="mb-2 block text-sm text-slate-300">Email Address</label>
                 <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4 backdrop-blur-xl transition-all focus-within:border-cyan-400/40 focus-within:shadow-[0_0_20px_rgba(34,211,238,0.2)]">
@@ -107,6 +141,8 @@ export default function LoginPage() {
                   <input
                     type="email"
                     placeholder="you@example.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                 </div>
@@ -119,6 +155,8 @@ export default function LoginPage() {
                   <input
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                   <button
@@ -145,12 +183,16 @@ export default function LoginPage() {
                 </button>
               </div>
 
+              {error ? <p className="text-sm text-red-300">{error}</p> : null}
+
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
+                type="submit"
+                disabled={isSubmitting}
                 className="group relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-2xl bg-cyan-400  px-6 py-4 font-semibold text-white shadow-[0_0_30px_rgba(34,211,238,0.35)] transition-all hover:shadow-[0_0_40px_rgba(34,211,238,0.5)]"
               >
-                <span> Login </span>
+                <span>{isSubmitting ? "Logging in..." : "Login"}</span>
                 <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
               </motion.button>
             </form>

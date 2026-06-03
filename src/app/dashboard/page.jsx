@@ -1,12 +1,32 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { AdminDashboard } from "@/components/AdminDashboard";
+import { useAuth } from "@/utils/contexts/AuthContext";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { user, isLogin, isAuthLoading } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+
+    if (!isLogin) {
+      router.replace("/login");
+      return;
+    }
+
+    if (!isAdmin) {
+      router.replace("/");
+    }
+  }, [isAdmin, isAuthLoading, isLogin, router]);
+
+  if (isAuthLoading || !isLogin || !isAdmin) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-[#050816] text-white overflow-x-hidden">

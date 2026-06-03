@@ -1,4 +1,6 @@
-import { createContext, useContext, useEffect, useState } from "react";
+'use client';
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { request } from "@/app/api/services/base.service";
 
 const AuthContext = createContext(undefined);
 
@@ -7,44 +9,65 @@ export const AuthProvider = ({ children }) => {
     const [isLogin, setIsLogin] = useState(false);
     const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-    useEffect(() => {
-        try {
-            const data = localStorage.getItem('user');
-            if (data) {
-                const {token, role} = JSON.parse(data); //{token, role}
-                fetch('http://localhost:4000/users/verify-auth', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ token })
-                }).then(res => res.json())
-                .then(data => {
-                    console.log(data); // { message: "Good token", data: { ... } }
-                    setUser({ token, role }); // Only if your endpoint returns user data in a 'data' field
-                    setIsLogin(true);
+    const logout = useCallback(() => {
+        localStorage.removeItem('user');
+        localStorage.removeItem('token');
+        setUser(null);
+        setIsLogin(false);
+    }, []);
 
-                }).catch(err => {
-                    console.error("Auth verification failed:", err);
+    useEffect(() => {
+        let isMounted = true;
+
+        const verifyAuth = async () => {
+            try {
+                const data = localStorage.getItem('user');
+
+                if (!data) {
+                    if (isMounted) {
+                        setIsAuthLoading(false);
+                    }
+                    return;
+                }
+
+                const { token, role } = JSON.parse(data); //{token, role}
+                const result = await request('/auth/me');
+
+                if (!isMounted) {
+                    return;
+                }
+
+                if (result.error) {
+                    localStorage.removeItem('user');
+                    localStorage.removeItem('token');
+                    setUser(null);
                     setIsLogin(false);
-                })
-                .finally(() => {
+                } else {
+                    setUser({ token, role, ...result.data });
+                    setIsLogin(true);
+                }
+            } catch (error) {
+                console.error("Error verifying auth:", error);
+                if (isMounted) {
+                    setUser(null);
+                    setIsLogin(false);
+                }
+            } finally {
+                if (isMounted) {
                     setIsAuthLoading(false);
-                });
-                   
-            } else {
-                setIsAuthLoading(false);
+                }
             }
-        } catch (error) {
-            console.error("Error verifying auth:", error);
-            setIsLogin(false);
-            setIsAuthLoading(false);
-        }
+        };
+
+        void verifyAuth();
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
     return (
-        <AuthContext.Provider value={{ user, setUser, isLogin, setIsLogin, isAuthLoading }}>
+        <AuthContext.Provider value={{ user, setUser, isLogin, setIsLogin, isAuthLoading, logout }}>
             {children}
         </AuthContext.Provider>
     );

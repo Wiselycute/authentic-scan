@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ShieldCheck,
   Mail,
@@ -12,10 +13,80 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { request } from "@/app/api/services/base.service";
+import { useAuth } from "@/utils/contexts/AuthContext";
 
 export default function RegisterPage() {
+  const router = useRouter();
+  const { setUser, setIsLogin } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [step, setStep] = useState("details");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const requestOtp = async (event) => {
+    event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+
+    const result = await request("/auth/register/request-otp", { email }, "POST");
+    if (result.error) {
+      setError(result.message || "Unable to request OTP");
+      setIsSubmitting(false);
+      return;
+    }
+
+    setStep("otp");
+    setIsSubmitting(false);
+  };
+
+  const verifyOtpAndRegister = async (event) => {
+    event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+
+    const otpResult = await request(
+      "/auth/register/verify-otp",
+      { email, otp },
+      "POST"
+    );
+
+    if (otpResult.error) {
+      setError(otpResult.message || "Invalid OTP");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const registerResult = await request(
+      "/auth/register",
+      {
+        fullName,
+        email,
+        password,
+        confirm_password: confirmPassword,
+      },
+      "POST"
+    );
+
+    if (registerResult.error) {
+      setError(registerResult.message || "Unable to create account");
+      setIsSubmitting(false);
+      return;
+    }
+
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
+    setUser(null);
+    setIsLogin(false);
+    setIsSubmitting(false);
+    router.push("/login?registered=1");
+  };
 
   return (
     <section className="relative min-h-screen overflow-x-hidden bg-[#02071F] flex items-center justify-center px-6 py-16">
@@ -100,7 +171,9 @@ export default function RegisterPage() {
               </p>
             </div>
 
-            <form className="space-y-4">
+            <form className="space-y-4" onSubmit={step === "details" ? requestOtp : verifyOtpAndRegister}>
+              {step === "details" ? (
+                <>
               <div>
                 <label className="mb-2 block text-sm text-slate-300">Full Name</label>
                 <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4 backdrop-blur-xl transition-all focus-within:border-cyan-400/40 focus-within:shadow-[0_0_20px_rgba(34,211,238,0.2)]">
@@ -108,6 +181,8 @@ export default function RegisterPage() {
                   <input
                     type="text"
                     placeholder="John Doe"
+                    value={fullName}
+                    onChange={(event) => setFullName(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                 </div>
@@ -120,6 +195,8 @@ export default function RegisterPage() {
                   <input
                     type="email"
                     placeholder="you@example.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                 </div>
@@ -132,6 +209,8 @@ export default function RegisterPage() {
                   <input
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                   <button
@@ -155,6 +234,8 @@ export default function RegisterPage() {
                   <input
                     type={showConfirmPassword ? "text" : "password"}
                     placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
                     className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
                   />
                   <button
@@ -176,14 +257,59 @@ export default function RegisterPage() {
                 <span>I agree to the Terms and Privacy Policy</span>
               </div>
 
+                {error ? <p className="text-sm text-red-300">{error}</p> : null}
+
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
+                type="submit"
+                disabled={isSubmitting}
                 className="group relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-2xl bg-cyan-400  px-6 py-4 font-semibold text-white shadow-[0_0_30px_rgba(34,211,238,0.35)] transition-all hover:shadow-[0_0_40px_rgba(34,211,238,0.5)]"
               >
-                <span>Create Account</span>
+                <span>{isSubmitting ? "Sending OTP..." : "Send OTP"}</span>
                 <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
               </motion.button>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-2 block text-sm text-slate-300">Verification Code</label>
+                    <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4 backdrop-blur-xl transition-all focus-within:border-cyan-400/40 focus-within:shadow-[0_0_20px_rgba(34,211,238,0.2)]">
+                      <Lock className="h-5 w-5 text-cyan-300" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="123456"
+                        value={otp}
+                        onChange={(event) => setOtp(event.target.value)}
+                        className="w-full bg-transparent text-white outline-none placeholder:text-slate-500"
+                      />
+                    </div>
+                  </div>
+
+                  {error ? <p className="text-sm text-red-300">{error}</p> : null}
+
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="group relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-2xl bg-cyan-400 px-6 py-4 font-semibold text-white shadow-[0_0_30px_rgba(34,211,238,0.35)] transition-all hover:shadow-[0_0_40px_rgba(34,211,238,0.5)]"
+                  >
+                    <span>{isSubmitting ? "Creating account..." : "Verify & Create Account"}</span>
+                    <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
+                  </motion.button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep("details")}
+                    className="w-full text-sm text-cyan-300 hover:text-cyan-200"
+                  >
+                    Back to account details
+                  </button>
+                </>
+              )}
             </form>
 
             <div className="my-6 flex items-center gap-4">

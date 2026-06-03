@@ -1,4 +1,7 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Image from 'next/image';
+import Link from 'next/link';
 import {
   BarChart,
   Bar,
@@ -24,75 +27,285 @@ import {
   Package,
   Eye,
   CheckCircle,
+  RefreshCw,
+  Tag,
+  Flag,
+  ChevronRight,
 } from 'lucide-react';
 
+import { getAdminAnalytics } from '@/app/api/services/admin.service';
+
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const STATUS_LABELS = {
+  likely_authentic: 'Authentic',
+  suspicious: 'Suspicious',
+  review_required: 'Review Required',
+  unverified: 'Unverified',
+};
+
+const sourceLabel = (source) => {
+  if (!source) return 'Scan';
+  const normalized = String(source).toLowerCase();
+  if (normalized === 'qr') return 'QR Scan';
+  if (normalized === 'barcode') return 'Barcode Scan';
+  if (normalized === 'upload') return 'Image Upload';
+  if (normalized === 'analyze') return 'AI Analysis';
+  return 'Scan';
+};
+
+const relativeTime = (dateValue) => {
+  if (!dateValue) return 'Unknown time';
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+
+  const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diffSeconds < 60) return 'Just now';
+  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)} minutes ago`;
+  if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)} hours ago`;
+  return `${Math.floor(diffSeconds / 86400)} days ago`;
+};
+
+const toPercentage = (value, total) => {
+  if (!total) return '0.0%';
+  return `${((value / total) * 100).toFixed(1)}%`;
+};
+
+const formatChartDate = (dateValue) => {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
+    label: DAY_LABELS[date.getDay()],
+  };
+};
+
+const getEmptyWeeklyData = () => {
+  const result = [];
+
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - offset);
+
+    result.push({
+      key: `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`,
+      date: DAY_LABELS[day.getDay()],
+      authentic: 0,
+      fake: 0,
+    });
+  }
+
+  return result;
+};
+
+const getEmptyDetectionData = () => {
+  const buckets = [];
+  for (let i = 0; i < 6; i += 1) {
+    const startHour = i * 4;
+    buckets.push({
+      hour: `${String(startHour).padStart(2, '0')}:00`,
+      detections: 0,
+    });
+  }
+  return buckets;
+};
+
 export function AdminDashboard({ onBack }) {
-  // Mock Data
-  const scanTrendData = [
-    { date: 'Mon', scans: 1240, authentic: 1180, fake: 60 },
-    { date: 'Tue', scans: 1450, authentic: 1385, fake: 65 },
-    { date: 'Wed', scans: 1680, authentic: 1595, fake: 85 },
-    { date: 'Thu', scans: 1520, authentic: 1450, fake: 70 },
-    { date: 'Fri', scans: 1890, authentic: 1795, fake: 95 },
-    { date: 'Sat', scans: 2100, authentic: 1995, fake: 105 },
-    { date: 'Sun', scans: 1750, authentic: 1665, fake: 85 },
-  ];
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [analytics, setAnalytics] = useState(null);
 
-  const categoryData = [
-    { name: 'Cosmetics', value: 2850, color: '#ec4899' },
-    { name: 'Electronics', value: 2340, color: '#06b6d4' },
-    { name: 'Fashion', value: 1920, color: '#8b5cf6' },
-    { name: 'Medicines', value: 1560, color: '#3b82f6' },
-    { name: 'Food', value: 1200, color: '#10b981' },
-    { name: 'Others', value: 930, color: '#f59e0b' },
-  ];
+  const loadAnalytics = async () => {
+    setIsLoading(true);
+    setErrorMessage('');
 
-  const detectionData = [
-    { hour: '00:00', detections: 12 },
-    { hour: '04:00', detections: 8 },
-    { hour: '08:00', detections: 28 },
-    { hour: '12:00', detections: 45 },
-    { hour: '16:00', detections: 38 },
-    { hour: '20:00', detections: 22 },
-  ];
+    const response = await getAdminAnalytics();
 
-  const stats = [
-    {
-      icon: Activity,
-      label: 'Total Scans',
-      value: '10,845',
-      change: '+12.5%',
-      trend: 'up',
-      color: 'from-blue-500 to-cyan-500',
-    },
-    {
-      icon: CheckCircle,
-      label: 'Authentic Products',
-      value: '10,165',
-      change: '93.7%',
-      trend: 'neutral',
-      color: 'from-green-500 to-emerald-500',
-    },
-    {
-      icon: AlertTriangle,
-      label: 'Counterfeit Detected',
-      value: '680',
-      change: '+8.2%',
-      trend: 'up',
-      color: 'from-orange-500 to-red-500',
-    },
-    {
-      icon: Users,
-      label: 'Active Users',
-      value: '4,293',
-      change: '+18.3%',
-      trend: 'up',
-      color: 'from-cyan-500 to-blue-500',
-    },
-  ];
+    if (response.error) {
+      setErrorMessage(response.message || 'Unable to load dashboard analytics.');
+      setAnalytics(null);
+      setIsLoading(false);
+      return;
+    }
+
+    setAnalytics(response.data || null);
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    void loadAnalytics();
+  }, []);
+
+  const transformed = useMemo(() => {
+    const scanBreakdownArray = Array.isArray(analytics?.scanBreakdown)
+      ? analytics.scanBreakdown
+      : [];
+    const reportBreakdownArray = Array.isArray(analytics?.reportBreakdown)
+      ? analytics.reportBreakdown
+      : [];
+    const recentScansArray = Array.isArray(analytics?.recentScans)
+      ? analytics.recentScans
+      : [];
+
+    const scanBreakdown = scanBreakdownArray.reduce((acc, item) => {
+      const key = item?._id || 'unverified';
+      acc[key] = Number(item?.count || 0);
+      return acc;
+    }, {});
+
+    const totalScans = Object.values(scanBreakdown).reduce(
+      (sum, count) => sum + Number(count || 0),
+      0
+    );
+    const authenticCount = Number(scanBreakdown.likely_authentic || 0);
+    const suspiciousCount = Number(scanBreakdown.suspicious || 0);
+    const reviewRequiredCount = Number(scanBreakdown.review_required || 0);
+    const counterfeitCount = suspiciousCount + reviewRequiredCount;
+
+    const stats = [
+      {
+        icon: Activity,
+        label: 'Total Scans',
+        value: totalScans.toLocaleString(),
+        change: `${scanBreakdownArray.length} status types`,
+        trend: 'neutral',
+        color: 'bg-cyan-500',
+      },
+      {
+        icon: CheckCircle,
+        label: 'Authentic Products',
+        value: authenticCount.toLocaleString(),
+        change: toPercentage(authenticCount, totalScans),
+        trend: 'neutral',
+        color: 'bg-emerald-500',
+      },
+      {
+        icon: AlertTriangle,
+        label: 'Suspicious Products',
+        value: suspiciousCount.toLocaleString(),
+        change: toPercentage(suspiciousCount, totalScans),
+        trend: suspiciousCount > 0 ? 'up' : 'neutral',
+        color: 'bg-orange-500 ',
+      },
+      {
+        icon: Users,
+        label: 'Active Users',
+        value: Number(analytics?.users || 0).toLocaleString(),
+        change: 'Registered users',
+        trend: 'neutral',
+        color: 'bg-blue-500',
+      },
+    ];
+
+    const reportPalette = {
+      open: '#f59e0b',
+      reviewed: '#06b6d4',
+      resolved: '#10b981',
+      rejected: '#ef4444',
+    };
+    const categoryData = reportBreakdownArray.map((item) => ({
+      name: STATUS_LABELS[item?._id] || String(item?._id || 'Unknown').replace(/_/g, ' '),
+      value: Number(item?.count || 0),
+      color: reportPalette[item?._id] || '#64748b',
+    }));
+
+    const weeklyData = getEmptyWeeklyData();
+    const weeklyByKey = weeklyData.reduce((acc, day) => {
+      acc[day.key] = day;
+      return acc;
+    }, {});
+
+    recentScansArray.forEach((scan) => {
+      const chartDate = formatChartDate(scan?.createdAt);
+      if (!chartDate || !weeklyByKey[chartDate.key]) {
+        return;
+      }
+
+      const status = scan?.verificationStatus;
+      if (status === 'likely_authentic') {
+        weeklyByKey[chartDate.key].authentic += 1;
+      } else if (status === 'suspicious' || status === 'review_required') {
+        weeklyByKey[chartDate.key].fake += 1;
+      }
+    });
+
+    const scanTrendData = weeklyData.map((item) => ({
+      date: item.date,
+      authentic: item.authentic,
+      fake: item.fake,
+    }));
+
+    const detectionData = getEmptyDetectionData();
+    recentScansArray.forEach((scan) => {
+      const createdAt = new Date(scan?.createdAt || '');
+      if (Number.isNaN(createdAt.getTime())) {
+        return;
+      }
+
+      const status = scan?.verificationStatus;
+      if (status !== 'suspicious' && status !== 'review_required') {
+        return;
+      }
+
+      const bucket = Math.min(5, Math.floor(createdAt.getHours() / 4));
+      detectionData[bucket].detections += 1;
+    });
+
+    const recentItems = recentScansArray.map((scan) => {
+      const status = scan?.verificationStatus || 'unverified';
+      const confidence = Number(scan?.aiAnalysis?.confidence || 0);
+
+      const rawDate = scan?.createdAt ? new Date(scan.createdAt) : null;
+      const scanDate = rawDate && !Number.isNaN(rawDate.getTime())
+        ? rawDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : 'Unknown date';
+
+      return {
+        id: scan?._id || '',
+        productName: scan?.productName || 'Unknown Product',
+        brandName: scan?.brandName || '—',
+        imageUrl: scan?.uploadedImage?.url || null,
+        status,
+        confidence: Math.round(confidence),
+        confidencePercentage: `${Math.round(confidence)}%`,
+        scanDate,
+      };
+    });
+
+    const mostScannedBrands = Array.isArray(analytics?.mostScannedBrands)
+      ? analytics.mostScannedBrands
+      : [];
+    const mostScannedCategories = Array.isArray(analytics?.mostScannedCategories)
+      ? analytics.mostScannedCategories
+      : [];
+    const mostReportedSuspicious = Array.isArray(analytics?.mostReportedSuspicious)
+      ? analytics.mostReportedSuspicious
+      : [];
+
+    return {
+      stats,
+      categoryData,
+      scanTrendData,
+      detectionData,
+      recentItems,
+      mostScannedBrands,
+      mostScannedCategories,
+      mostReportedSuspicious,
+    };
+  }, [analytics]);
+
+  const stats = transformed?.stats || [];
+  const categoryData = transformed?.categoryData || [];
+  const scanTrendData = transformed?.scanTrendData || [];
+  const detectionData = transformed?.detectionData || [];
+  const recentItems = transformed?.recentItems || [];
+  const mostScannedBrands = transformed?.mostScannedBrands || [];
+  const mostScannedCategories = transformed?.mostScannedCategories || [];
+  const mostReportedSuspicious = transformed?.mostReportedSuspicious || [];
 
   return (
-    <section className="min-h-screen pt-32 px-6 pb-20">
+    <section className="min-h-screen pt-11 px-6 pb-20">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-12">
@@ -117,10 +330,31 @@ export function AdminDashboard({ onBack }) {
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                void loadAnalytics();
+              }}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 transition-colors text-sm"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
             <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse" />
             <span className="text-sm text-white/60">Live</span>
           </div>
         </div>
+
+        {errorMessage && (
+          <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {errorMessage}
+          </div>
+        )}
+
+        {isLoading && (
+          <div className="mb-6 rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white/70">
+            Loading dashboard data...
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
@@ -235,7 +469,7 @@ export function AdminDashboard({ onBack }) {
                 </h3>
 
                 <p className="text-sm text-white/60">
-                  Scan distribution
+                  Report status distribution
                 </p>
               </div>
             </div>
@@ -269,6 +503,95 @@ export function AdminDashboard({ onBack }) {
                 />
               </PieChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Analytics — Brands / Categories / Reported */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+          {/* Most Scanned Brands */}
+          <div className="bg-linear-to-br from-white/10 to-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center">
+                <Tag className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold">Most Scanned Brands</h3>
+                <p className="text-xs text-white/50">Top 5 brands</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {mostScannedBrands.length === 0 && (
+                <p className="text-sm text-white/40">No data yet.</p>
+              )}
+              {mostScannedBrands.map((b, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-white/40 w-4 shrink-0">{i + 1}.</span>
+                    <span className="text-sm truncate">{b._id || 'Unknown'}</span>
+                  </div>
+                  <span className="text-sm font-semibold text-blue-400 shrink-0 ml-2">{b.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Most Scanned Categories */}
+          <div className="bg-linear-to-br from-white/10 to-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 bg-cyan-500/20 rounded-xl flex items-center justify-center">
+                <Package className="w-5 h-5 text-cyan-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold">Most Scanned Categories</h3>
+                <p className="text-xs text-white/50">Top 5 categories</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {mostScannedCategories.length === 0 && (
+                <p className="text-sm text-white/40">No data yet.</p>
+              )}
+              {mostScannedCategories.map((c, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-white/40 w-4 shrink-0">{i + 1}.</span>
+                    <span className="text-sm truncate capitalize">{c._id || 'Unknown'}</span>
+                  </div>
+                  <span className="text-sm font-semibold text-cyan-400 shrink-0 ml-2">{c.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Most Reported Suspicious */}
+          <div className="bg-linear-to-br from-white/10 to-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 bg-red-500/20 rounded-xl flex items-center justify-center">
+                <Flag className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold">Most Reported Suspicious</h3>
+                <p className="text-xs text-white/50">Top 5 reported products</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {mostReportedSuspicious.length === 0 && (
+                <p className="text-sm text-white/40">No data yet.</p>
+              )}
+              {mostReportedSuspicious.map((r, i) => (
+                <div key={i} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-white/40 w-4 shrink-0">{i + 1}.</span>
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{r._id || 'Unknown'}</p>
+                      {r.brandName && (
+                        <p className="text-xs text-white/40 truncate">{r.brandName}</p>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-sm font-semibold text-red-400 shrink-0">{r.count}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -343,97 +666,81 @@ export function AdminDashboard({ onBack }) {
           </div>
 
           <div className="space-y-3">
-            {[
-              {
-                product: 'Louis Vuitton Handbag',
-                status: 'authentic',
-                time: '2 minutes ago',
-                score: 97,
-              },
-              {
-                product: 'iPhone 15 Pro Max',
-                status: 'authentic',
-                time: '5 minutes ago',
-                score: 99,
-              },
-              {
-                product: 'Chanel No. 5 Perfume',
-                status: 'suspicious',
-                time: '8 minutes ago',
-                score: 68,
-              },
-              {
-                product: 'Nike Air Jordan 1',
-                status: 'fake',
-                time: '12 minutes ago',
-                score: 34,
-              },
-              {
-                product: 'Rolex Submariner',
-                status: 'authentic',
-                time: '15 minutes ago',
-                score: 96,
-              },
-            ].map((item, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/5 hover:border-white/10 transition-all"
-              >
-                <div className="flex items-center gap-4">
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      item.status === 'authentic'
-                        ? 'bg-green-400'
-                        : item.status === 'suspicious'
-                        ? 'bg-orange-400'
-                        : 'bg-red-400'
-                    }`}
-                  />
-
-                  <div>
-                    <div className="font-medium">
-                      {item.product}
-                    </div>
-
-                    <div className="text-sm text-white/60">
-                      {item.time}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <div className="text-sm">
-                    <span className="text-white/60">
-                      Score:{' '}
-                    </span>
-
-                    <span
-                      className={`font-semibold ${
-                        item.status === 'authentic'
-                          ? 'text-green-400'
-                          : item.status === 'suspicious'
-                          ? 'text-orange-400'
-                          : 'text-red-400'
-                      }`}
-                    >
-                      {item.score}%
-                    </span>
-                  </div>
-
-                  <div
-                    className={`px-3 py-1 rounded-lg text-xs font-medium capitalize ${
-                      item.status === 'authentic'
-                        ? 'bg-green-500/20 text-green-400'
-                        : item.status === 'suspicious'
-                        ? 'bg-orange-500/20 text-orange-400'
-                        : 'bg-red-500/20 text-red-400'
-                    }`}
-                  >
-                    {item.status}
-                  </div>
-                </div>
+            {recentItems.length > 0 && (
+              <div className="hidden md:grid grid-cols-[1.2fr_1fr_0.8fr_0.7fr_0.8fr] gap-4 px-4 text-[11px] uppercase tracking-wide text-white/45">
+                <span>Product</span>
+                <span>Brand</span>
+                <span>Authenticity Status</span>
+                <span className="text-right">Confidence</span>
+                <span className="text-right">Scan Date</span>
               </div>
-            ))}
+            )}
+
+            {recentItems.map((item, index) => {
+              const isAuthentic = item.status === 'likely_authentic';
+              const isSuspicious = item.status === 'suspicious' || item.status === 'review_required';
+              const statusColor = isAuthentic
+                ? 'bg-green-500/20 text-green-400'
+                : isSuspicious
+                ? 'bg-orange-500/20 text-orange-400'
+                : 'bg-white/10 text-white/50';
+              const scoreColor = isAuthentic
+                ? 'text-green-400'
+                : isSuspicious
+                ? 'text-orange-400'
+                : 'text-white/50';
+              const statusLabel = item.status === 'likely_authentic'
+                ? 'Authentic'
+                : String(item.status || 'Unverified').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+              const row = (
+                <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_0.8fr_0.7fr_0.8fr_auto] gap-4 items-center p-4 bg-white/5 rounded-xl border border-white/5 hover:border-white/15 hover:bg-white/8 transition-all cursor-pointer group">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-white/10 border border-white/10 flex-shrink-0 flex items-center justify-center">
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt={item.productName}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <Package className="w-5 h-5 text-white/30" />
+                      )}
+                    </div>
+                    <p className="font-medium truncate">{item.productName}</p>
+                  </div>
+
+                  <p className="text-sm text-white/80 truncate">{item.brandName}</p>
+
+                  <div className={`justify-self-start md:justify-self-start px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap ${statusColor}`}>
+                    {statusLabel}
+                  </div>
+
+                  <p className={`text-sm md:text-right font-semibold ${scoreColor}`}>{item.confidencePercentage}</p>
+
+                  <p className="text-xs md:text-right text-white/50">{item.scanDate}</p>
+
+                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50 transition-colors flex-shrink-0 justify-self-end" />
+                </div>
+              );
+
+              return item.id ? (
+                <Link key={item.id} href={`/history/${item.id}`}>
+                  {row}
+                </Link>
+              ) : (
+                <div key={`no-id-${index}`}>{row}</div>
+              );
+            })}
+
+            {!recentItems.length && !isLoading && (
+              <div className="p-4 bg-white/5 rounded-xl border border-white/5 text-sm text-white/60">
+                No recent scans available yet.
+              </div>
+            )}
           </div>
         </div>
       </div>

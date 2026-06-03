@@ -1,14 +1,16 @@
 "use client";
-
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, Send, Camera, Upload, QrCode, Barcode,
-  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw,
+  ArrowLeft, Send, Camera, Upload, QrCode, Barcode, Menu,
+  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw, Trash2, Search,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BrowserMultiFormatReader, BarcodeFormat, DecodeHintType, NotFoundException,
 } from "@zxing/library";
+import { request, requestForm } from "@/app/api/services/base.service";
+import { useAuth } from "@/utils/contexts/AuthContext";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -19,12 +21,162 @@ const AI_STEPS = [
   "Scanning QR metadata...",
 ];
 
+const HISTORY_LIMIT = 20;
+
+const statusMap = {
+  likely_authentic: "authentic",
+  review_required: "review",
+  suspicious: "suspicious",
+  unverified: "review",
+};
+
 let _msgId = 1;
 const mkId = () => _msgId++;
+
+const dataUrlToFile = async (dataUrl, fileName = "scan.jpg") => {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], fileName, { type: blob.type || "image/jpeg" });
+};
+
+const firstNonEmpty = (...values) => values.find((value) => typeof value === "string" && value.trim())?.trim() || "";
+
+const buildScanTitle = (...values) => {
+  const value = firstNonEmpty(...values);
+  if (!value) return "Product scan";
+  return /^scan\s*:/i.test(value) ? value : `Scan: ${value}`;
+};
+
+const normalizeScanResult = (payload) => {
+  const analysis = payload?.analysis || {};
+  const rawStatus = String(analysis.status || "").toLowerCase();
+  const normalizedStatus = statusMap[rawStatus] || "review";
+  const confidence = Math.max(0, Math.min(100, Number(analysis.confidence) || 0));
+  const scanId = payload?.scan?._id || null;
+  const productName = firstNonEmpty(
+    payload?.scan?.productName,
+    payload?.scan?.product?.name,
+    analysis?.productName,
+    payload?.productName,
+    payload?.product?.name,
+    "Unknown Product",
+  );
+  const brandName = firstNonEmpty(
+    payload?.scan?.brandName,
+    payload?.scan?.brand?.name,
+    analysis?.brandName,
+    payload?.brandName,
+  );
+  const category = firstNonEmpty(
+    payload?.scan?.category,
+    analysis?.category,
+    payload?.product?.category,
+  );
+  const imageThumbnail = firstNonEmpty(
+    payload?.scan?.uploadedImage?.url,
+    payload?.scan?.imageThumbnail,
+    payload?.scan?.image,
+  );
+
+  const suspiciousIndicators = Array.isArray(analysis.suspiciousIndicators)
+    ? analysis.suspiciousIndicators
+    : [];
+
+  const reasoning = Array.isArray(analysis.reasoning) ? analysis.reasoning : [];
+  const recommendation = analysis.recommendation ? [analysis.recommendation] : [];
+
+  return {
+    scanId,
+    title: buildScanTitle(payload?.scan?.title, productName),
+    productName,
+    brandName,
+    category,
+    imageThumbnail,
+    status: normalizedStatus,
+    confidence,
+    suspiciousIndicators: suspiciousIndicators.length > 0
+      ? suspiciousIndicators
+      : ["No major risk indicators were returned by the analysis."],
+    detailedReasoning: [...reasoning, ...recommendation].slice(0, 5),
+  };
+};
+
+const normalizeHistoryItem = (item) => {
+  if (!item || typeof item !== "object") return null;
+
+  const scanId = item.scanId || item._id || item.id || item?.scan?._id;
+  if (!scanId) return null;
+
+  const rawStatus = String(item.verificationStatus || item.status || item?.aiAnalysis?.status || "review").toLowerCase();
+  const status = statusMap[rawStatus] || rawStatus || "review";
+
+  const productName = firstNonEmpty(
+    item.productName,
+    item.product?.name,
+    item.title,
+    item.scanTitle,
+    "Unknown Product",
+  );
+
+  const brandName = firstNonEmpty(item.brandName, item.brand?.name);
+  const imageThumbnail = firstNonEmpty(item.imageThumbnail, item.image, item.uploadedImage?.url);
+  const category = firstNonEmpty(item.category, item.product?.category);
+
+  return {
+    scanId: String(scanId),
+    title: buildScanTitle(item.title, item.scanTitle, productName),
+    productName,
+    brandName,
+    category,
+    imageThumbnail,
+    status,
+    confidence: Math.max(0, Math.min(100, Number(item.confidence || item?.aiAnalysis?.confidence) || 0)),
+    createdAt: item.createdAt || item.updatedAt || null,
+  };
+};
+
+const normalizeScanDetail = (detail) => {
+  const analysis = detail?.aiAnalysis || detail?.analysis || {};
+  const rawStatus = String(detail?.verificationStatus || analysis?.status || "review").toLowerCase();
+
+  return {
+    scanId: detail?.scanId || detail?._id || detail?.scan?._id || null,
+    status: statusMap[rawStatus] || rawStatus || "review",
+    confidence: Math.max(0, Math.min(100, Number(detail?.confidence || analysis?.confidence) || 0)),
+    suspiciousIndicators: Array.isArray(detail?.suspiciousIndicators)
+      ? detail.suspiciousIndicators
+      : Array.isArray(analysis?.suspiciousIndicators)
+        ? analysis.suspiciousIndicators
+        : ["No major risk indicators were returned by the analysis."],
+    detailedReasoning: [
+      ...(Array.isArray(detail?.reasoning) ? detail.reasoning : []),
+      ...(Array.isArray(analysis?.reasoning) ? analysis.reasoning : []),
+      ...(detail?.recommendation ? [detail.recommendation] : []),
+      ...(analysis?.recommendation ? [analysis.recommendation] : []),
+    ].filter(Boolean).slice(0, 5),
+  };
+};
+
+const formatHistoryDate = (value) => {
+  if (!value) return "Unknown date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return date.toLocaleString();
+};
 
 // ─── component ────────────────────────────────────────────────────────────────
 
 export default function Scanner({ onScan, onBack }) {
+  const router = useRouter();
+  const { isLogin, isAuthLoading } = useAuth();
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (!isLogin) {
+      router.replace("/login");
+    }
+  }, [isAuthLoading, isLogin, router]);
+
   // ── state ──────────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState([{
     id: mkId(),
@@ -37,9 +189,18 @@ export default function Scanner({ onScan, onBack }) {
   const [codeDetected, setCodeDetected] = useState(false);
   const [scannedCode, setScannedCode]   = useState("");
   const [loading, setLoading]           = useState(false);
+  const [savingReportId, setSavingReportId] = useState(null);
   const [aiStep, setAiStep]             = useState(0);
   const [error, setError]               = useState("");
   const [showHelp, setShowHelp]         = useState(false);
+  const [historyOpen, setHistoryOpen]   = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historySearch, setHistorySearch] = useState("");
+  const [activeHistoryScanId, setActiveHistoryScanId] = useState(null);
+  const [deletingHistoryId, setDeletingHistoryId] = useState(null);
 
   // ── refs ───────────────────────────────────────────────────────────────────
   const videoRef       = useRef(null);
@@ -56,6 +217,92 @@ export default function Scanner({ onScan, onBack }) {
   const addMsg   = (payload) => setMessages(prev => [...prev, { id: mkId(), ...payload }]);
   const showErr  = (msg) => setError(msg);
   const clearErr = () => setError("");
+
+  const loadHistory = useCallback(async (searchValue = "") => {
+    setHistoryLoading(true);
+    setHistoryError("");
+
+    const query = new URLSearchParams({ page: "1", limit: String(HISTORY_LIMIT) });
+    const normalizedSearch = String(searchValue || "").trim();
+    if (normalizedSearch) {
+      query.set("search", normalizedSearch);
+    }
+    const response = await request(`/scans/history?${query.toString()}`);
+
+    if (response.error) {
+      setHistoryError(response.message || "Unable to load scan history.");
+      setHistoryLoading(false);
+      return;
+    }
+
+    const rawItems = Array.isArray(response.data)
+      ? response.data
+      : Array.isArray(response.data?.items)
+        ? response.data.items
+        : [];
+
+    const normalized = rawItems.map(normalizeHistoryItem).filter(Boolean);
+    setHistoryItems(normalized);
+    setHistoryLoaded(true);
+    setHistoryLoading(false);
+  }, []);
+
+  const loadHistoryScan = useCallback(async (scanId) => {
+    if (!scanId) return;
+
+    setHistoryError("");
+    setActiveHistoryScanId(String(scanId));
+    const response = await request(`/scans/${scanId}`);
+
+    if (response.error) {
+      setHistoryError(response.message || "Unable to load selected scan.");
+      return;
+    }
+
+    const result = normalizeScanDetail(response.data);
+    if (!result.scanId) {
+      setHistoryError("Selected scan is missing required details.");
+      return;
+    }
+
+    setMessages([
+      {
+        id: mkId(),
+        type: "assistant",
+        content: "Loaded scan from history.",
+      },
+      {
+        id: mkId(),
+        type: "assistant",
+        result,
+      },
+    ]);
+    setHistoryOpen(false);
+    clearErr();
+    scrollBottom("auto");
+  }, []);
+
+  const deleteHistoryScan = useCallback(async (scanId) => {
+    if (!scanId || deletingHistoryId) return;
+
+    setHistoryError("");
+    setDeletingHistoryId(String(scanId));
+
+    const response = await request(`/scans/${scanId}`, null, "DELETE");
+
+    if (response.error) {
+      setHistoryError(response.message || "Unable to delete selected scan.");
+      setDeletingHistoryId(null);
+      return;
+    }
+
+    setHistoryItems((prev) => prev.filter((item) => String(item.scanId) !== String(scanId)));
+    if (String(activeHistoryScanId) === String(scanId)) {
+      setActiveHistoryScanId(null);
+    }
+
+    setDeletingHistoryId(null);
+  }, [activeHistoryScanId, deletingHistoryId]);
 
   const scrollBottom = (behavior = "smooth") => {
     requestAnimationFrame(() => {
@@ -79,6 +326,21 @@ export default function Scanner({ onScan, onBack }) {
     const t = setInterval(() => setAiStep(p => (p + 1) % AI_STEPS.length), 900);
     return () => clearInterval(t);
   }, [loading]);
+
+  useEffect(() => {
+    if (isAuthLoading || !isLogin || historyLoaded || historyLoading) return;
+    void loadHistory(historySearch);
+  }, [isAuthLoading, isLogin, historyLoaded, historyLoading, historySearch, loadHistory]);
+
+  useEffect(() => {
+    if (isAuthLoading || !isLogin || !historyLoaded) return;
+
+    const timer = setTimeout(() => {
+      void loadHistory(historySearch);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [historySearch, historyLoaded, isAuthLoading, isLogin, loadHistory]);
 
   // ── STOP CAMERA ────────────────────────────────────────────────────────────
   const stopCamera = useCallback(() => {
@@ -255,40 +517,8 @@ export default function Scanner({ onScan, onBack }) {
     e.target.value = "";
   };
 
-  // ── MOCK ANALYSIS ──────────────────────────────────────────────────────────
-  const buildMockAnalysis = (source) => {
-    const sample = String(source || "").slice(0, 1800);
-    let hash = 0;
-    for (let i = 0; i < sample.length; i++) hash = (hash * 31 + sample.charCodeAt(i)) % 100000;
-
-    const confidence = 62 + (hash % 35);
-    const pool = [
-      "Minor typography mismatch between brand name and side panel",
-      "Inconsistent spacing around regulatory text",
-      "Printing sharpness is uneven near batch information",
-      "Color tone differs slightly from expected brand palette",
-      "Barcode margin looks narrower than standard packaging guides",
-    ];
-    const count = confidence >= 84 ? 1 : confidence >= 72 ? 2 : 3;
-
-    let status = "suspicious";
-    if (confidence >= 88) status = "authentic";
-    else if (confidence >= 72) status = "review";
-
-    return {
-      status,
-      confidence,
-      suspiciousIndicators: pool.slice(0, count),
-      detailedReasoning: [
-        "Packaging structure appears mostly consistent, but micro-text and kerning are not fully uniform across panels.",
-        "Brand identity markers are present, though logo finishing and print density suggest possible non-official print reproduction.",
-        "No single element confirms counterfeit status; confidence is based on combined visual risk indicators.",
-      ],
-    };
-  };
-
   // ── ANALYZE ────────────────────────────────────────────────────────────────
-  const analyzeProduct = ({ image = preview, code = scannedCode } = {}) => {
+  const analyzeProduct = async ({ image = preview, code = scannedCode } = {}) => {
     if (!image && !code) return;
 
     const img  = image;
@@ -308,16 +538,71 @@ export default function Scanner({ onScan, onBack }) {
     ]);
     scrollBottom();
 
-    setTimeout(() => {
-      const result = buildMockAnalysis(cd || img);
+    try {
+      const formData = new FormData();
+      let endpoint = "/scans/analyze";
+
+      if (img) {
+        const imageFile = await dataUrlToFile(img);
+        formData.append("image", imageFile);
+      }
+
+      if (cd) {
+        const mode = scanMode === "barcode" ? "barcode" : "qr";
+        endpoint = mode === "barcode" ? "/scans/barcode" : "/scans/qr";
+        if (mode === "barcode") {
+          formData.append("barcodeInput", cd);
+        } else {
+          formData.append("qrInput", cd);
+        }
+
+        if (img) {
+          endpoint = "/scans/analyze";
+        }
+      }
+
+      const response = await requestForm(endpoint, formData, "POST");
+      if (response.error) {
+        throw new Error(response.message || "Unable to analyze product");
+      }
+
+      const result = normalizeScanResult(response.data);
       setMessages(prev => [
         ...prev.filter(m => m.id !== ldId),
         { id: mkId(), type: "assistant", result },
       ]);
+      setActiveHistoryScanId(String(result.scanId || ""));
+      if (result.scanId) {
+        setHistoryItems((prev) => {
+          const withoutCurrent = prev.filter((item) => String(item.scanId) !== String(result.scanId));
+          return [{
+            scanId: String(result.scanId),
+            title: result.title,
+            productName: result.productName || "Unknown Product",
+            brandName: result.brandName || "",
+            category: result.category || "",
+            imageThumbnail: result.imageThumbnail || "",
+            status: result.status,
+            confidence: result.confidence,
+            createdAt: new Date().toISOString(),
+          }, ...withoutCurrent].slice(0, HISTORY_LIMIT);
+        });
+      }
+      if (onScan) onScan(result);
+    } catch (analysisError) {
+      setMessages(prev => [
+        ...prev.filter(m => m.id !== ldId),
+        {
+          id: mkId(),
+          type: "assistant",
+          content: analysisError.message || "Unable to analyze this scan right now.",
+        },
+      ]);
+      showErr(analysisError.message || "Unable to analyze this scan right now.");
+    } finally {
       setLoading(false);
       scrollBottom();
-      if (onScan) onScan(result);
-    }, 3200);
+    }
   };
 
   // ── VERIFY SCANNED CODE ────────────────────────────────────────────────────
@@ -328,7 +613,59 @@ export default function Scanner({ onScan, onBack }) {
     analyzeProduct({ code });
   };
 
+  const saveReport = async (result) => {
+    if (!result?.scanId) {
+      showErr("No scan reference found. Run a new analysis before saving a report.");
+      return;
+    }
+
+    setSavingReportId(result.scanId);
+    clearErr();
+
+    const category = result.status === "suspicious"
+      ? "counterfeit"
+      : result.status === "review"
+        ? "suspicious_listing"
+        : "other";
+
+    const reason = result.suspiciousIndicators?.[0] || "Scanner UI report submission";
+    const description = (result.detailedReasoning || []).join(" ").slice(0, 1900);
+
+    const response = await request(
+      "/reports",
+      {
+        scanId: result.scanId,
+        category,
+        reason,
+        description,
+        evidence: [],
+      },
+      "POST"
+    );
+
+    if (response.error) {
+      showErr(response.message || "Unable to save report right now.");
+      setSavingReportId(null);
+      return;
+    }
+
+    addMsg({
+      type: "assistant",
+      content: "Report submitted successfully. Our team can now review this scan.",
+    });
+    setSavingReportId(null);
+    scrollBottom();
+  };
+
   // ── RENDER ─────────────────────────────────────────────────────────────────
+  if (isAuthLoading || !isLogin) {
+    return (
+      <div className="min-h-dvh bg-[#050816] text-white flex items-center justify-center px-4">
+        <p className="text-sm text-white/70">Checking access...</p>
+      </div>
+    );
+  }
+
   const canSend = (!!preview || !!scannedCode) && !loading;
   const isInitialState = messages.length === 1 && !preview && !scannedCode && !loading;
 
@@ -337,8 +674,8 @@ export default function Scanner({ onScan, onBack }) {
 
       {/* ── background glows ── */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-32 left-1/4 w-[600px] h-[600px] bg-cyan-500/8 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-blue-600/8 rounded-full blur-3xl" />
+        <div className="absolute -top-32 left-1/4 w-150 h-150 bg-cyan-500/8 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-125 h-125 bg-blue-600/8 rounded-full blur-3xl" />
       </div>
 
       {/* ── header ── */}
@@ -346,16 +683,28 @@ export default function Scanner({ onScan, onBack }) {
         <div className="max-w-5xl mx-auto px-4 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
+              onClick={() => {
+                setHistoryOpen(true);
+                if (!historyLoaded && !historyLoading) {
+                  void loadHistory();
+                }
+              }}
+              className="w-9 h-9 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center hover:bg-white/10 transition"
+              aria-label="Open scan history"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+            <button
               onClick={onBack}
               className="w-9 h-9 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center hover:bg-white/10 transition"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-600  flex items-center justify-center shadow-lg shadow-cyan-500/25">
               <Shield className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="font-bold text-base leading-tight bg-gradient-to-r from-cyan-300 to-blue-400 bg-clip-text text-transparent">
+              <h1 className="font-bold text-base leading-tight bg-linear-to-r from-cyan-300 to-blue-400 bg-clip-text text-transparent">
                 AuthentiScan
               </h1>
               <p className="text-[11px] text-white/35 leading-none">AI Product Verification</p>
@@ -411,7 +760,7 @@ export default function Scanner({ onScan, onBack }) {
                 className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}
               >
                 {msg.type === "user" ? (
-                  <div className="max-w-[88%] md:max-w-lg bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-400/20 rounded-2xl p-3.5 backdrop-blur-xl">
+                  <div className="max-w-[88%] md:max-w-lg bg-linear-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-400/20 rounded-2xl p-3.5 backdrop-blur-xl">
                     {msg.image && (
                       <img src={msg.image} alt="Product" className="rounded-xl mb-2.5 max-h-72 w-full object-cover" />
                     )}
@@ -428,7 +777,11 @@ export default function Scanner({ onScan, onBack }) {
                         </div>
                       </div>
                     ) : msg.result ? (
-                      <ResultCard result={msg.result} />
+                      <ResultCard
+                        result={msg.result}
+                        onSaveReport={() => saveReport(msg.result)}
+                        isSaving={savingReportId === msg.result.scanId}
+                      />
                     ) : (
                       <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
                         <p className="text-white/80 text-sm">{msg.content}</p>
@@ -499,7 +852,7 @@ export default function Scanner({ onScan, onBack }) {
                 aria-label="Analyze product"
                 className={`w-11 h-11 rounded-xl flex items-center justify-center transition shrink-0 ${
                   canSend
-                    ? "bg-gradient-to-br from-cyan-500 to-blue-600 shadow-md shadow-cyan-500/30 active:scale-95"
+                    ? "bg-linear-to-br from-cyan-500 to-blue-600 shadow-md shadow-cyan-500/30 active:scale-95"
                     : "bg-white/8 text-white/30 cursor-not-allowed"
                 }`}
               >
@@ -514,6 +867,331 @@ export default function Scanner({ onScan, onBack }) {
         </div>
 
       </div>{/* end main */}
+
+      {/* ── history drawer ── */}
+     {/* ───────────────── HISTORY DRAWER ───────────────── */}
+<AnimatePresence>
+  {historyOpen && (
+    <>
+      {/* BACKDROP */}
+      <motion.button
+        type="button"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setHistoryOpen(false)}
+        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
+      />
+
+      {/* SIDEBAR */}
+      <motion.aside
+        initial={{ x: -420 }}
+        animate={{ x: 0 }}
+        exit={{ x: -420 }}
+        transition={{
+          type: "spring",
+          stiffness: 260,
+          damping: 28,
+        }}
+        className="
+          fixed left-0 top-0 bottom-0 z-60
+          w-97.5 max-w-[92vw]
+          overflow-hidden
+          border-r border-white/10
+          bg-[#050816]/95
+          backdrop-blur-3xl
+          shadow-[0_0_50px_rgba(0,0,0,0.45)]
+        "
+      >
+        <div className="flex h-full flex-col">
+          {/* HEADER */}
+          <div className="border-b border-white/10 bg-white/3 px-5 py-5 backdrop-blur-3xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+
+                  <h2 className="text-lg font-semibold text-white">
+                    Scan History
+                  </h2>
+                </div>
+
+                <p className="mt-1 text-xs text-white/45">
+                  Access previous authenticity scans
+                </p>
+              </div>
+
+              <button
+                onClick={() => setHistoryOpen(false)}
+                className="
+                  flex h-9 w-9 items-center justify-center
+                  rounded-xl
+                  border border-white/10
+                  bg-white/5
+                  backdrop-blur-xl
+                  transition
+                  hover:bg-white/8
+                "
+              >
+                <X className="h-4 w-4 text-white/70" />
+              </button>
+            </div>
+
+            {/* SEARCH */}
+            <div className="mt-4">
+              <div
+                className="
+                  flex items-center gap-2
+                  rounded-2xl
+                  border border-white/10
+                  bg-white/4
+                  px-3 py-3
+                  backdrop-blur-xl
+                "
+              >
+                <Search className="h-4 w-4 text-white/40" />
+
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                  placeholder="Search product, brand, barcode..."
+                  className="
+                    w-full bg-transparent
+                    text-sm text-white
+                    placeholder:text-white/30
+                    outline-none
+                  "
+                />
+              </div>
+            </div>
+
+            {/* REFRESH */}
+            <button
+              onClick={() => void loadHistory(historySearch)}
+              className="
+                mt-3 w-full
+                rounded-2xl
+                border border-cyan-400/20
+                bg-cyan-500/10
+                px-4 py-3
+                text-sm font-medium text-cyan-100
+                backdrop-blur-xl
+                transition-all duration-300
+                hover:bg-cyan-500/15
+              "
+            >
+              Refresh History
+            </button>
+          </div>
+
+          {/* HISTORY LIST */}
+          <div
+            className="
+              flex-1 overflow-y-auto
+              space-y-3
+              px-4 py-4
+              scrollbar-none
+            "
+          >
+            {/* LOADING */}
+            {historyLoading && (
+              <div
+                className="
+                  rounded-2xl
+                  border border-white/10
+                  bg-white/4
+                  p-4
+                  backdrop-blur-2xl
+                "
+              >
+                <div className="flex items-center gap-3 text-white/70">
+                  <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
+
+                  <span className="text-sm">
+                    Loading scan history...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* ERROR */}
+            {!historyLoading && historyError && (
+              <div
+                className="
+                  rounded-2xl
+                  border border-rose-400/20
+                  bg-rose-500/10
+                  p-4
+                  backdrop-blur-2xl
+                "
+              >
+                <p className="text-sm text-rose-100">
+                  {historyError}
+                </p>
+              </div>
+            )}
+
+            {/* EMPTY */}
+            {!historyLoading &&
+              !historyError &&
+              historyItems.length === 0 && (
+                <div
+                  className="
+                    rounded-3xl
+                    border border-dashed border-white/10
+                    bg-white/3
+                    p-6
+                    text-center
+                    backdrop-blur-2xl
+                  "
+                >
+                  <div
+                    className="
+                      mx-auto mb-3
+                      flex h-14 w-14 items-center justify-center
+                      rounded-2xl
+                      bg-white/4
+                    "
+                  >
+                    <Shield className="h-6 w-6 text-cyan-300" />
+                  </div>
+
+                  <p className="text-sm text-white/70">
+                    No scan history yet
+                  </p>
+
+                  <p className="mt-1 text-xs text-white/40">
+                    Your previous scans will appear here.
+                  </p>
+                </div>
+              )}
+
+            {/* HISTORY ITEMS */}
+            {!historyLoading &&
+              !historyError &&
+              historyItems.map((item) => {
+                const isActive =
+                  String(activeHistoryScanId) ===
+                  String(item.scanId);
+
+                return (
+                  <motion.div
+                    key={item.scanId}
+                    whileHover={{ y: -2 }}
+                    transition={{ duration: 0.2 }}
+                    className={`
+                      relative overflow-hidden
+                      rounded-3xl
+                      border
+                      backdrop-blur-2xl
+                      transition-all duration-300
+                      ${
+                        isActive
+                          ? "border-cyan-400/30 bg-cyan-500/10"
+                          : "border-white/10 bg-white/4 hover:bg-white/6"
+                      }
+                    `}
+                  >
+                    {/* ACTIVE OVERLAY */}
+                    {isActive && (
+                      <div className="absolute inset-0 bg-cyan-400/5" />
+                    )}
+
+                    {/* CONTENT */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void loadHistoryScan(item.scanId)
+                      }
+                      className="relative w-full p-4 pr-14 text-left"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+                          {item.imageThumbnail ? (
+                            <img
+                              src={item.imageThumbnail}
+                              alt={item.productName || "Scanned product"}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-cyan-200/70">
+                              <Shield className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3 className="line-clamp-2 text-base font-semibold leading-5 text-white">
+                              {item.productName || "Unknown Product"}
+                            </h3>
+
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                                item.status === "authentic"
+                                  ? "border border-emerald-300/40 bg-emerald-500/15 text-emerald-200"
+                                  : item.status === "suspicious"
+                                    ? "border border-rose-300/40 bg-rose-500/15 text-rose-200"
+                                    : "border border-amber-300/40 bg-amber-500/15 text-amber-200"
+                              }`}
+                            >
+                              {String(item.status || "review").replaceAll("_", " ")}
+                            </span>
+                          </div>
+
+                          <p className="mt-1 truncate text-xs text-white/55">
+                            {item.brandName || "Unknown Brand"}
+                          </p>
+
+                          <div className="mt-3 flex items-center justify-between text-xs text-white/50">
+                            <span>{item.confidence}% confidence</span>
+                            <span>{formatHistoryDate(item.createdAt)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+
+                    {/* DELETE BUTTON */}
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+
+                        void deleteHistoryScan(item.scanId);
+                      }}
+                      disabled={Boolean(deletingHistoryId)}
+                      className="
+                        absolute right-3 top-3
+                        flex h-9 w-9 items-center justify-center
+                        rounded-xl
+                        border border-white/10
+                        bg-black/20
+                        text-white/50
+                        backdrop-blur-xl
+                        transition-all duration-300
+                        hover:border-rose-400/30
+                        hover:bg-rose-500/10
+                        hover:text-rose-200
+                      "
+                    >
+                      {String(deletingHistoryId) ===
+                      String(item.scanId) ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </button>
+                  </motion.div>
+                );
+              })}
+          </div>
+        </div>
+      </motion.aside>
+    </>
+  )}
+</AnimatePresence>
 
       {/*
         ── CAMERA OVERLAY (FIX 3) ──────────────────────────────────────────────
@@ -617,7 +1295,7 @@ export default function Scanner({ onScan, onBack }) {
           {scanMode === "image" ? (
             <button
               onClick={capturePhoto}
-              className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 border-4 border-white/30 shadow-xl shadow-cyan-500/30 active:scale-95 transition"
+              className="w-16 h-16 rounded-full bg-linear-to-br from-cyan-400 to-blue-600 border-4 border-white/30 shadow-xl shadow-cyan-500/30 active:scale-95 transition"
             />
           ) : (
             <button
@@ -625,7 +1303,7 @@ export default function Scanner({ onScan, onBack }) {
               disabled={!codeDetected}
               className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition ${
                 codeDetected
-                  ? "bg-gradient-to-r from-cyan-500 to-blue-600 shadow-lg shadow-cyan-500/30 active:scale-95 text-white"
+                  ? "bg-linear-to-r from-cyan-500 to-blue-600 shadow-lg shadow-cyan-500/30 active:scale-95 text-white"
                   : "bg-white/10 text-white/30 cursor-not-allowed"
               }`}
             >
@@ -641,7 +1319,7 @@ export default function Scanner({ onScan, onBack }) {
         {showHelp && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-70 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
           >
             <motion.div
               initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }}
@@ -685,7 +1363,7 @@ export default function Scanner({ onScan, onBack }) {
                 </button>
                 <button
                   onClick={() => setShowHelp(false)}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-sm font-semibold"
+                  className="px-4 py-2 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold"
                 >
                   Got it
                 </button>
@@ -715,7 +1393,7 @@ function ActionBtn({ onClick, label, children }) {
   );
 }
 
-function ResultCard({ result }) {
+function ResultCard({ result, onSaveReport, isSaving }) {
   const isAuth   = result.status === "authentic";
   const isReview = result.status === "review";
   const color    = isAuth ? "emerald" : isReview ? "cyan" : "amber";
@@ -751,8 +1429,12 @@ function ResultCard({ result }) {
             <Section title="Detailed reasoning"    items={result.detailedReasoning} />
           </div>
 
-          <button className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-sm font-semibold hover:opacity-90 transition">
-            Save Report
+          <button
+            onClick={onSaveReport}
+            disabled={isSaving || !result.scanId}
+            className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold hover:opacity-90 transition disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? "Saving..." : "Save Report"}
           </button>
         </div>
       </div>
@@ -775,11 +1457,15 @@ function ConfidenceBar({ value, color }) {
 }
 
 function Section({ title, items }) {
+  const safeItems = Array.isArray(items) && items.length > 0
+    ? items
+    : ["No additional details were provided."];
+
   return (
     <div>
       <p className="text-xs font-semibold text-white/60 uppercase tracking-wide mb-1.5">{title}</p>
       <ul className="space-y-1">
-        {items.map((item, i) => (
+        {safeItems.map((item, i) => (
           <li key={i} className="text-sm text-white/75 flex gap-2">
             <span className="text-white/30 shrink-0">•</span>
             <span>{item}</span>
