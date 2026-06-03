@@ -19,13 +19,13 @@ const getResolvedDirectApiBase = () => {
         return "";
     }
 
-    const { hostname, protocol } = window.location;
+    const { hostname } = window.location;
     if (!hostname) {
         return "";
     }
 
-    const directProtocol = protocol === "https:" ? "https:" : "http:";
-    return `${directProtocol}//${hostname}:4000/api`;
+    // Local backend in this project is served over HTTP by default.
+    return `http://${hostname}:4000/api`;
 };
 
 const buildRequestUrl = (baseUrl, path) => {
@@ -44,19 +44,21 @@ const maybeRetryWithDirectApi = async ({
 }) => {
     const resolvedDirectBase = getResolvedDirectApiBase();
 
-    if (!resolvedDirectBase) {
+    const primaryBase = preferDirect && resolvedDirectBase ? resolvedDirectBase : BASE_API_URL;
+    const fallbackBase = primaryBase === BASE_API_URL ? resolvedDirectBase : BASE_API_URL;
+
+    if (!fallbackBase || fallbackBase === primaryBase) {
         return primaryResponse;
     }
 
-    const primaryBase = preferDirect ? resolvedDirectBase : BASE_API_URL;
-    if (primaryBase === resolvedDirectBase) {
-        return primaryResponse;
-    }
-
-    // Retry transient upstream/proxy failures against direct backend origin.
+    // Retry transient upstream failures and network failures on the alternate base.
     if (!primaryResponse || [502, 503, 504].includes(primaryResponse.status)) {
-        const { url: directUrl } = buildRequestUrl(resolvedDirectBase, path);
-        return fetch(directUrl, options);
+        const { url: fallbackUrl } = buildRequestUrl(fallbackBase, path);
+        try {
+            return await fetch(fallbackUrl, options);
+        } catch {
+            return primaryResponse;
+        }
     }
 
     return primaryResponse;
