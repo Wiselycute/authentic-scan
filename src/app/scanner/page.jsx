@@ -462,29 +462,60 @@ export default function Scanner({ onScan, onBack }) {
       DecodeHintType.POSSIBLE_FORMATS,
       mode === "qr"
         ? [BarcodeFormat.QR_CODE]
-        : [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.CODE_128,
-           BarcodeFormat.CODE_39, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]
+        : [
+            BarcodeFormat.EAN_13,
+            BarcodeFormat.EAN_8,
+            BarcodeFormat.CODE_128,
+            BarcodeFormat.CODE_39,
+            BarcodeFormat.UPC_A,
+            BarcodeFormat.UPC_E,
+            BarcodeFormat.ITF,
+            BarcodeFormat.CODABAR,
+          ]
     );
     hints.set(DecodeHintType.TRY_HARDER, true);
 
-    readerRef.current = new BrowserMultiFormatReader(hints, 300);
+    readerRef.current = new BrowserMultiFormatReader(hints, 150);
+
+    const onDecode = (result, err) => {
+      if (result) {
+        const text = result.getText();
+        scannedCodeRef.current = text;
+        setScannedCode(text);
+        setCodeDetected(true);
+        if (readerRef.current) {
+          try { readerRef.current.reset(); } catch (_) {}
+          readerRef.current = null;
+        }
+        return;
+      }
+      if (err && !(err instanceof NotFoundException)) {
+        console.warn("Scan error:", err);
+      }
+    };
+
+    const preferredConstraints = {
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: mode === "barcode" ? 1920 : 1280 },
+        height: { ideal: mode === "barcode" ? 1080 : 720 },
+      },
+    };
+
+    const fallbackConstraints = {
+      audio: false,
+      video: true,
+    };
 
     readerRef.current
-      .decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
-        if (result) {
-          const text = result.getText();
-          scannedCodeRef.current = text;
-          setScannedCode(text);
-          setCodeDetected(true);
-          if (readerRef.current) {
-            try { readerRef.current.reset(); } catch (_) {}
-            readerRef.current = null;
-          }
-          return;
+      .decodeFromConstraints(preferredConstraints, videoRef.current, onDecode)
+      .catch((error) => {
+        if (error?.name === "OverconstrainedError" || error?.name === "NotFoundError") {
+          return readerRef.current?.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
         }
-        if (err && !(err instanceof NotFoundException)) {
-          console.warn("Scan error:", err);
-        }
+
+        throw error;
       })
       .catch(handleCameraError)
       .finally(() => { startingRef.current = false; });
@@ -1220,7 +1251,6 @@ export default function Scanner({ onScan, onBack }) {
         <video
           ref={videoRef}
           playsInline
-          // eslint-disable-next-line react/no-unknown-property
           webkit-playsinline="true"
           muted
           autoPlay
