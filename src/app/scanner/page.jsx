@@ -473,8 +473,12 @@ export default function Scanner({ onScan, onBack }) {
             BarcodeFormat.CODABAR,
           ]
     );
-    hints.set(DecodeHintType.TRY_HARDER, true);
+    // TRY_HARDER helps with 1D barcodes at angles but is too slow for QR codes.
+    if (mode === "barcode") {
+      hints.set(DecodeHintType.TRY_HARDER, true);
+    }
 
+    // 150 ms per frame: responsive without overloading the main thread.
     readerRef.current = new BrowserMultiFormatReader(hints, 150);
 
     const onDecode = (result, err) => {
@@ -494,25 +498,37 @@ export default function Scanner({ onScan, onBack }) {
       }
     };
 
+    // Lower resolution = faster frame processing in ZXing.
+    // Barcode needs width more than height; QR works well at 640×480.
     const preferredConstraints = {
       audio: false,
       video: {
         facingMode: { ideal: "environment" },
-        width: { ideal: mode === "barcode" ? 1920 : 1280 },
-        height: { ideal: mode === "barcode" ? 1080 : 720 },
+        width:  { ideal: mode === "barcode" ? 1280 : 640 },
+        height: { ideal: mode === "barcode" ? 720  : 480 },
       },
     };
 
+    // Fallback: drop resolution constraints but KEEP rear camera preference.
+    // Using `video: true` here would silently select the front camera on phones.
     const fallbackConstraints = {
       audio: false,
-      video: true,
+      video: { facingMode: { ideal: "environment" } },
     };
 
     readerRef.current
       .decodeFromConstraints(preferredConstraints, videoRef.current, onDecode)
       .catch((error) => {
-        if (error?.name === "OverconstrainedError" || error?.name === "NotFoundError") {
-          return readerRef.current?.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
+        if (
+          error?.name === "OverconstrainedError" ||
+          error?.name === "NotFoundError" ||
+          error?.name === "NotReadableError"
+        ) {
+          // Reader may have been reset; create a fresh one for the retry.
+          if (!readerRef.current) {
+            readerRef.current = new BrowserMultiFormatReader(hints, 150);
+          }
+          return readerRef.current.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
         }
 
         throw error;
