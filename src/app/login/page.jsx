@@ -50,7 +50,7 @@ export default function LoginPage() {
   };
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-[#02071F] flex items-center justify-center px-6 py-16">
+    <section className="relative min-h-screen overflow-x-hidden bg-[#02071F] flex items-center justify-center px-6 py-16">
       {/* Background Glow */}
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute -top-30 -left-25 h-100 w-100 rounded-full bg-cyan-500/20 blur-3xl" />
@@ -65,7 +65,7 @@ export default function LoginPage() {
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8 }}
-        className="relative z-10 grid w-full max-w-4xl max-h-150 overflow-hidden rounded-4xl border border-cyan-500/20 bg-white/5 backdrop-blur-2xl shadow-[0_0_80px_rgba(34,211,238,0.12)] lg:h-150 lg:grid-cols-2"
+        className="relative z-10 grid w-full max-w-4xl overflow-hidden rounded-4xl border border-cyan-500/20 bg-white/5 backdrop-blur-2xl shadow-[0_0_80px_rgba(34,211,238,0.12)] lg:h-150 lg:max-h-150 lg:grid-cols-2"
       >
         {/* Left Side */}
         <div className="no-scrollbar relative hidden h-full flex-col justify-between overflow-y-auto border-r border-white/10 px-10 py-6 lg:flex">
@@ -126,7 +126,7 @@ export default function LoginPage() {
         </div>
 
         {/* Right Side */}
-        <div className="no-scrollbar relative flex h-full items-start justify-center overflow-y-auto p-6 sm:p-8">
+        <div className="no-scrollbar relative flex h-full items-start justify-center overflow-y-auto p-6 pb-8 sm:p-8">
           <div className="w-full max-w-md py-2">
             <div className="mb-6">
               <h2 className="mb-2 text-4xl font-bold text-white">Welcome Back</h2>
