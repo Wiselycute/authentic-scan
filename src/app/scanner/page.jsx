@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Send, Camera, Upload, QrCode, Barcode, Menu,
-  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw, Trash2, Search,
+  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw, Trash2, Search, Copy, Check,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -40,6 +40,13 @@ const dataUrlToFile = async (dataUrl, fileName = "scan.jpg") => {
 };
 
 const firstNonEmpty = (...values) => values.find((value) => typeof value === "string" && value.trim())?.trim() || "";
+const normalizeStringArray = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 50);
+};
 
 const buildScanTitle = (...values) => {
   const value = firstNonEmpty(...values);
@@ -77,6 +84,31 @@ const normalizeScanResult = (payload) => {
     payload?.scan?.imageThumbnail,
     payload?.scan?.image,
   );
+  const manufacturer = firstNonEmpty(
+    payload?.scan?.metadata?.manufacturer,
+    payload?.scan?.product?.manufacturer,
+    analysis?.manufacturer,
+    payload?.manufacturer,
+  );
+  const countryOfOrigin = firstNonEmpty(
+    payload?.scan?.metadata?.countryOfOrigin,
+    payload?.scan?.brand?.country,
+    payload?.scan?.product?.countryOfOrigin,
+    analysis?.countryOfOrigin,
+    payload?.countryOfOrigin,
+  );
+  const ingredients = normalizeStringArray(
+    payload?.scan?.metadata?.ingredients
+      || payload?.scan?.product?.ingredients
+      || analysis?.ingredients
+      || payload?.ingredients
+  );
+  const productImage = firstNonEmpty(
+    payload?.scan?.metadata?.productImage,
+    analysis?.productImage,
+    payload?.scan?.uploadedImage?.url,
+    payload?.scan?.product?.referenceImages?.[0],
+  );
 
   const suspiciousIndicators = Array.isArray(analysis.suspiciousIndicators)
     ? analysis.suspiciousIndicators
@@ -88,10 +120,17 @@ const normalizeScanResult = (payload) => {
   return {
     scanId,
     title: buildScanTitle(payload?.scan?.title, productName),
+    source: payload?.scan?.source || payload?.source || null,
+    createdAt: payload?.scan?.createdAt || null,
+    updatedAt: payload?.scan?.updatedAt || null,
     productName,
     brandName,
     category,
     imageThumbnail,
+    manufacturer,
+    countryOfOrigin,
+    ingredients,
+    productImage,
     status: normalizedStatus,
     confidence,
     suspiciousIndicators: suspiciousIndicators.length > 0
@@ -121,14 +160,23 @@ const normalizeHistoryItem = (item) => {
   const brandName = firstNonEmpty(item.brandName, item.brand?.name);
   const imageThumbnail = firstNonEmpty(item.imageThumbnail, item.image, item.uploadedImage?.url);
   const category = firstNonEmpty(item.category, item.product?.category);
+  const manufacturer = firstNonEmpty(item.manufacturer, item.product?.manufacturer);
+  const countryOfOrigin = firstNonEmpty(item.countryOfOrigin, item.brand?.country, item.product?.countryOfOrigin);
+  const ingredients = normalizeStringArray(item.ingredients || item.product?.ingredients);
+  const productImage = firstNonEmpty(item.productImage, imageThumbnail, item.product?.referenceImages?.[0]);
 
   return {
     scanId: String(scanId),
     title: buildScanTitle(item.title, item.scanTitle, productName),
+    source: item.source || null,
     productName,
     brandName,
     category,
     imageThumbnail,
+    manufacturer,
+    countryOfOrigin,
+    ingredients,
+    productImage,
     status,
     confidence: Math.max(0, Math.min(100, Number(item.confidence || item?.aiAnalysis?.confidence) || 0)),
     createdAt: item.createdAt || item.updatedAt || null,
@@ -138,9 +186,70 @@ const normalizeHistoryItem = (item) => {
 const normalizeScanDetail = (detail) => {
   const analysis = detail?.aiAnalysis || detail?.analysis || {};
   const rawStatus = String(detail?.verificationStatus || analysis?.status || "review").toLowerCase();
+  const productName = firstNonEmpty(
+    detail?.productName,
+    detail?.scan?.productName,
+    detail?.product?.name,
+    analysis?.productName,
+    "Unknown Product",
+  );
+  const brandName = firstNonEmpty(
+    detail?.brandName,
+    detail?.scan?.brandName,
+    detail?.brand?.name,
+    analysis?.brandName,
+  );
+  const category = firstNonEmpty(
+    detail?.category,
+    detail?.scan?.category,
+    detail?.product?.category,
+    analysis?.category,
+  );
+  const imageThumbnail = firstNonEmpty(
+    detail?.imageThumbnail,
+    detail?.uploadedImage?.url,
+    detail?.scan?.uploadedImage?.url,
+  );
+  const manufacturer = firstNonEmpty(
+    detail?.manufacturer,
+    detail?.metadata?.manufacturer,
+    detail?.product?.manufacturer,
+    analysis?.manufacturer,
+  );
+  const countryOfOrigin = firstNonEmpty(
+    detail?.countryOfOrigin,
+    detail?.metadata?.countryOfOrigin,
+    detail?.brand?.country,
+    detail?.product?.countryOfOrigin,
+    analysis?.countryOfOrigin,
+  );
+  const ingredients = normalizeStringArray(
+    detail?.ingredients
+      || detail?.metadata?.ingredients
+      || detail?.product?.ingredients
+      || analysis?.ingredients
+  );
+  const productImage = firstNonEmpty(
+    detail?.productImage,
+    detail?.metadata?.productImage,
+    detail?.uploadedImage?.url,
+    detail?.product?.referenceImages?.[0],
+  );
 
   return {
     scanId: detail?.scanId || detail?._id || detail?.scan?._id || null,
+    title: buildScanTitle(detail?.title, detail?.scan?.title, productName),
+    source: detail?.source || detail?.scan?.source || null,
+    createdAt: detail?.createdAt || detail?.scan?.createdAt || null,
+    updatedAt: detail?.updatedAt || detail?.scan?.updatedAt || null,
+    productName,
+    brandName,
+    category,
+    imageThumbnail,
+    manufacturer,
+    countryOfOrigin,
+    ingredients,
+    productImage,
     status: statusMap[rawStatus] || rawStatus || "review",
     confidence: Math.max(0, Math.min(100, Number(detail?.confidence || analysis?.confidence) || 0)),
     suspiciousIndicators: Array.isArray(detail?.suspiciousIndicators)
@@ -661,10 +770,15 @@ export default function Scanner({ onScan, onBack }) {
           return [{
             scanId: String(result.scanId),
             title: result.title,
+            source: result.source || scanMode || null,
             productName: result.productName || "Unknown Product",
             brandName: result.brandName || "",
             category: result.category || "",
             imageThumbnail: result.imageThumbnail || "",
+            manufacturer: result.manufacturer || "",
+            countryOfOrigin: result.countryOfOrigin || "",
+            ingredients: Array.isArray(result.ingredients) ? result.ingredients : [],
+            productImage: result.productImage || result.imageThumbnail || "",
             status: result.status,
             confidence: result.confidence,
             createdAt: new Date().toISOString(),
@@ -712,7 +826,25 @@ export default function Scanner({ onScan, onBack }) {
         : "other";
 
     const reason = result.suspiciousIndicators?.[0] || "Scanner UI report submission";
-    const description = (result.detailedReasoning || []).join(" ").slice(0, 1900);
+    const reportContext = [
+      result.productName ? `Product: ${result.productName}` : "",
+      result.brandName ? `Brand: ${result.brandName}` : "",
+      result.category ? `Category: ${result.category}` : "",
+      result.manufacturer ? `Manufacturer: ${result.manufacturer}` : "",
+      result.countryOfOrigin ? `Country of origin: ${result.countryOfOrigin}` : "",
+      Array.isArray(result.ingredients) && result.ingredients.length > 0
+        ? `Ingredients: ${result.ingredients.join(", ")}`
+        : "",
+    ].filter(Boolean);
+    const description = [...reportContext, ...(result.detailedReasoning || [])].join(" ").slice(0, 1900);
+    const evidence = [
+      result.productImage || result.imageThumbnail || "",
+      result.productName ? `product:${result.productName}` : "",
+      result.brandName ? `brand:${result.brandName}` : "",
+      result.category ? `category:${result.category}` : "",
+      result.manufacturer ? `manufacturer:${result.manufacturer}` : "",
+      result.countryOfOrigin ? `country:${result.countryOfOrigin}` : "",
+    ].filter(Boolean);
 
     const response = await request(
       "/reports",
@@ -721,7 +853,7 @@ export default function Scanner({ onScan, onBack }) {
         category,
         reason,
         description,
-        evidence: [],
+        evidence,
       },
       "POST"
     );
@@ -1227,6 +1359,24 @@ export default function Scanner({ onScan, onBack }) {
                             {item.brandName || "Unknown Brand"}
                           </p>
 
+                          <div className="mt-2 space-y-1 text-xs text-white/55">
+                            {item.brandName ? (
+                              <p className="truncate">Brand: {item.brandName}</p>
+                            ) : null}
+                            {item.category ? (
+                              <p className="truncate">Category: {item.category}</p>
+                            ) : null}
+                            {item.manufacturer ? (
+                              <p className="truncate">Manufacturer: {item.manufacturer}</p>
+                            ) : null}
+                            {item.countryOfOrigin ? (
+                              <p className="truncate">Origin: {item.countryOfOrigin}</p>
+                            ) : null}
+                            {Array.isArray(item.ingredients) && item.ingredients.length > 0 ? (
+                              <p className="line-clamp-2">Ingredients: {item.ingredients.join(", ")}</p>
+                            ) : null}
+                          </div>
+
                           <div className="mt-3 flex items-center justify-between text-xs text-white/50">
                             <span>{item.confidence}% confidence</span>
                             <span>{formatHistoryDate(item.createdAt)}</span>
@@ -1475,16 +1625,94 @@ function ActionBtn({ onClick, label, children }) {
   );
 }
 
+function formatScanSource(value) {
+  if (!value || typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "qr") return "QR scan";
+  if (normalized === "barcode") return "Barcode scan";
+  if (normalized === "analyze") return "Image + code analysis";
+  if (normalized === "upload") return "Image upload";
+  return value;
+}
+
+function buildResultCopyText(result) {
+  const lines = [
+    result.title ? `Title: ${result.title}` : "",
+    result.productName ? `Product name: ${result.productName}` : "",
+    result.brandName ? `Brand: ${result.brandName}` : "",
+    result.category ? `Category: ${result.category}` : "",
+    result.manufacturer ? `Manufacturer: ${result.manufacturer}` : "",
+    result.countryOfOrigin ? `Country of origin: ${result.countryOfOrigin}` : "",
+    Array.isArray(result.ingredients) && result.ingredients.length > 0
+      ? `Ingredients: ${result.ingredients.join(", ")}`
+      : "",
+    result.source ? `Source: ${formatScanSource(result.source)}` : "",
+    result.createdAt ? `Saved: ${formatHistoryDate(result.createdAt)}` : "",
+    typeof result.confidence === "number" ? `Confidence: ${result.confidence}%` : "",
+    Array.isArray(result.suspiciousIndicators) && result.suspiciousIndicators.length > 0
+      ? `Suspicious indicators: ${result.suspiciousIndicators.join(" | ")}`
+      : "",
+    Array.isArray(result.detailedReasoning) && result.detailedReasoning.length > 0
+      ? `Detailed reasoning: ${result.detailedReasoning.join(" | ")}`
+      : "",
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}
+
+async function copyResultDetails(result) {
+  const text = buildResultCopyText(result);
+  if (!text) {
+    throw new Error("No product details available to copy.");
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is not available in this environment.");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "absolute";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 function ResultCard({ result, onSaveReport, isSaving }) {
   const isAuth   = result.status === "authentic";
   const isReview = result.status === "review";
   const color    = isAuth ? "emerald" : isReview ? "cyan" : "amber";
+  const [copyState, setCopyState] = useState("idle");
   const colorMap = {
     emerald: { bg: "bg-emerald-500/10", border: "border-emerald-400/30", icon: "bg-emerald-500/20", text: "text-emerald-400" },
     cyan:    { bg: "bg-cyan-500/10",    border: "border-cyan-400/30",    icon: "bg-cyan-500/20",    text: "text-cyan-400"    },
     amber:   { bg: "bg-amber-500/10",   border: "border-amber-400/30",   icon: "bg-amber-500/20",   text: "text-amber-400"   },
   };
   const c = colorMap[color];
+  const scanMetaRows = [
+    { label: "Scan title", value: result.title },
+    { label: "Source", value: formatScanSource(result.source) },
+    { label: "Saved", value: result.createdAt ? formatHistoryDate(result.createdAt) : "" },
+  ].filter((entry) => entry.value && String(entry.value).trim());
+
+  const handleCopy = async () => {
+    try {
+      await copyResultDetails(result);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1800);
+    } catch {
+      setCopyState("error");
+      window.setTimeout(() => setCopyState("idle"), 1800);
+    }
+  };
 
   return (
     <div className={`rounded-2xl border p-5 backdrop-blur-xl ${c.bg} ${c.border}`}>
@@ -1507,18 +1735,92 @@ function ResultCard({ result, onSaveReport, isSaving }) {
           <ConfidenceBar value={result.confidence} color={color} />
 
           <div className="mt-4 space-y-3">
+            {scanMetaRows.length > 0 ? <ScanMeta rows={scanMetaRows} /> : null}
+            <ProductProfile result={result} />
             <Section title="Suspicious indicators" items={result.suspiciousIndicators} />
             <Section title="Detailed reasoning"    items={result.detailedReasoning} />
           </div>
 
-          <button
-            onClick={onSaveReport}
-            disabled={isSaving || !result.scanId}
-            className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold hover:opacity-90 transition disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSaving ? "Saving..." : "Save Report"}
-          </button>
+          <div className="mt-4 flex flex-col sm:flex-row gap-2">
+            <button
+              onClick={handleCopy}
+              type="button"
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-white/12 bg-white/6 text-sm font-semibold hover:bg-white/10 transition flex items-center justify-center gap-2"
+            >
+              {copyState === "copied" ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy Details"}
+            </button>
+            <button
+              onClick={onSaveReport}
+              disabled={isSaving || !result.scanId}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold hover:opacity-90 transition disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSaving ? "Saving..." : "Save Report"}
+            </button>
+          </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ScanMeta({ rows }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-white/60 uppercase tracking-wide mb-2">Scan details</p>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.label} className="text-sm text-white/80 flex items-start gap-2">
+            <span className="text-white/50 min-w-28">{row.label}:</span>
+            <span>{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProductProfile({ result }) {
+  const infoRows = [
+    { label: "Product name", value: result.productName },
+    { label: "Brand", value: result.brandName },
+    { label: "Category", value: result.category },
+    { label: "Manufacturer", value: result.manufacturer },
+    { label: "Country of origin", value: result.countryOfOrigin },
+  ].filter((entry) => entry.value && String(entry.value).trim());
+
+  const ingredients = Array.isArray(result.ingredients) ? result.ingredients.filter(Boolean) : [];
+  const productImage = typeof result.productImage === "string" && result.productImage.trim()
+    ? result.productImage.trim()
+    : typeof result.imageThumbnail === "string" && result.imageThumbnail.trim()
+      ? result.imageThumbnail.trim()
+      : "";
+
+  if (infoRows.length === 0 && ingredients.length === 0 && !productImage) {
+    return null;
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-semibold text-white/60 uppercase tracking-wide mb-2">Product profile</p>
+      <div className="space-y-2">
+        {productImage ? (
+          <div className="w-full sm:w-40 h-24 rounded-lg border border-white/10 overflow-hidden bg-black/20">
+            <img src={productImage} alt={result.productName || "Scanned product"} className="w-full h-full object-cover" />
+          </div>
+        ) : null}
+        {infoRows.map((row) => (
+          <div key={row.label} className="text-sm text-white/80 flex items-start gap-2">
+            <span className="text-white/50 min-w-28">{row.label}:</span>
+            <span>{row.value}</span>
+          </div>
+        ))}
+        {ingredients.length > 0 ? (
+          <div className="text-sm text-white/80 flex items-start gap-2">
+            <span className="text-white/50 min-w-28">Ingredients:</span>
+            <span>{ingredients.join(", ")}</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );
