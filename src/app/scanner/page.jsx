@@ -319,7 +319,7 @@ export default function Scanner({ onScan, onBack }) {
   };
 
   // ── effects ────────────────────────────────────────────────────────────────
-  useEffect(() => { return () => stopCamera(); }, []);
+  useEffect(() => { return () => stopCamera(); }, [stopCamera]);
   useEffect(() => { scrollBottom(messages.length > 1 ? "smooth" : "auto"); }, [messages]);
   useEffect(() => {
     if (!loading) return;
