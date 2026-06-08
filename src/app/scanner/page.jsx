@@ -353,6 +353,10 @@ export default function Scanner({ onScan, onBack }) {
       streamRef.current = null;
     }
     if (videoRef.current) {
+      const activeStream = videoRef.current.srcObject;
+      if (activeStream && typeof activeStream.getTracks === "function") {
+        activeStream.getTracks().forEach((track) => track.stop());
+      }
       videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
@@ -364,6 +368,11 @@ export default function Scanner({ onScan, onBack }) {
   // ── START CAMERA ───────────────────────────────────────────────────────────
   const startCamera = async (mode = "image") => {
     if (startingRef.current) return;
+
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      showErr("Camera is not supported in this browser. Upload an image instead.");
+      return;
+    }
 
     // HTTPS guard (required on mobile, except localhost)
     if (!window.isSecureContext) {
@@ -448,6 +457,8 @@ export default function Scanner({ onScan, onBack }) {
       showErr("No camera found on this device.");
     } else if (err?.name === "NotReadableError") {
       showErr("Camera is in use by another app. Close it and try again.");
+    } else if (err?.name === "NotSupportedError") {
+      showErr("This browser does not support live camera scanning. Upload an image instead.");
     } else {
       showErr("Could not access camera. Check permissions and try again.");
     }
@@ -456,6 +467,10 @@ export default function Scanner({ onScan, onBack }) {
   // ── QR / BARCODE SCANNER ───────────────────────────────────────────────────
   const startCodeScanner = (mode) => {
     if (!videoRef.current) { startingRef.current = false; return; }
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      handleCameraError({ name: "NotSupportedError" });
+      return;
+    }
 
     const hints = new Map();
     hints.set(
@@ -516,23 +531,44 @@ export default function Scanner({ onScan, onBack }) {
       video: { facingMode: { ideal: "environment" } },
     };
 
-    readerRef.current
-      .decodeFromConstraints(preferredConstraints, videoRef.current, onDecode)
-      .catch((error) => {
-        if (
-          error?.name === "OverconstrainedError" ||
-          error?.name === "NotFoundError" ||
-          error?.name === "NotReadableError"
-        ) {
-          // Reader may have been reset; create a fresh one for the retry.
+    const runDecode = async () => {
+      try {
+        await readerRef.current.decodeFromConstraints(preferredConstraints, videoRef.current, onDecode);
+      } catch (preferredError) {
+        const canFallback =
+          preferredError?.name === "OverconstrainedError" ||
+          preferredError?.name === "NotFoundError" ||
+          preferredError?.name === "NotReadableError";
+
+        if (!canFallback) {
+          throw preferredError;
+        }
+
+        if (!readerRef.current) {
+          readerRef.current = new BrowserMultiFormatReader(hints, 150);
+        }
+
+        try {
+          await readerRef.current.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
+        } catch (fallbackError) {
+          const canUseAnyCamera =
+            fallbackError?.name === "OverconstrainedError" ||
+            fallbackError?.name === "NotFoundError";
+
+          if (!canUseAnyCamera) {
+            throw fallbackError;
+          }
+
           if (!readerRef.current) {
             readerRef.current = new BrowserMultiFormatReader(hints, 150);
           }
-          return readerRef.current.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
-        }
 
-        throw error;
-      })
+          await readerRef.current.decodeFromConstraints({ video: true, audio: false }, videoRef.current, onDecode);
+        }
+      }
+    };
+
+    runDecode()
       .catch(handleCameraError)
       .finally(() => { startingRef.current = false; });
   };
@@ -1420,7 +1456,7 @@ export default function Scanner({ onScan, onBack }) {
       </AnimatePresence>
 
       {/* hidden file input */}
-      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
+      <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
     </div>
   );
 }

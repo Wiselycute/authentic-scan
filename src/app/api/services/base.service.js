@@ -3,6 +3,9 @@ const DIRECT_API_BASE_URL = (process.env.NEXT_PUBLIC_DIRECT_API_BASE_URL || "").
 
 const getResolvedDirectApiBase = () => {
     if (DIRECT_API_BASE_URL) {
+        if (typeof window !== "undefined" && window.location.protocol === "https:" && /^http:\/\//i.test(DIRECT_API_BASE_URL)) {
+            return "";
+        }
         return DIRECT_API_BASE_URL;
     }
 
@@ -21,6 +24,11 @@ const getResolvedDirectApiBase = () => {
 
     const { hostname } = window.location;
     if (!hostname) {
+        return "";
+    }
+
+    // Avoid mixed-content fetches when frontend runs on HTTPS.
+    if (window.location.protocol === "https:") {
         return "";
     }
 
