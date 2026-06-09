@@ -428,6 +428,29 @@ export default function Scanner({ onScan, onBack }) {
     });
   };
 
+  // ── STOP CAMERA ────────────────────────────────────────────────────────────
+  const stopCamera = useCallback(() => {
+    if (readerRef.current) {
+      try { readerRef.current.reset(); } catch (_) {}
+      readerRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      const activeStream = videoRef.current.srcObject;
+      if (activeStream && typeof activeStream.getTracks === "function") {
+        activeStream.getTracks().forEach((track) => track.stop());
+      }
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+    startingRef.current = false;
+    setCameraActive(false);
+    setCodeDetected(false);
+  }, []);
+
   // ── effects ────────────────────────────────────────────────────────────────
 
   // FIX — Bug 3: set mountedRef=false on unmount so all in-flight async calls
@@ -459,29 +482,6 @@ export default function Scanner({ onScan, onBack }) {
     const timer = setTimeout(() => { void loadHistory(historySearch); }, 250);
     return () => clearTimeout(timer);
   }, [historySearch, historyLoaded, isAuthLoading, isLogin, loadHistory]);
-
-  // ── STOP CAMERA ────────────────────────────────────────────────────────────
-  const stopCamera = useCallback(() => {
-    if (readerRef.current) {
-      try { readerRef.current.reset(); } catch (_) {}
-      readerRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      const activeStream = videoRef.current.srcObject;
-      if (activeStream && typeof activeStream.getTracks === "function") {
-        activeStream.getTracks().forEach((track) => track.stop());
-      }
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
-    }
-    startingRef.current = false;
-    setCameraActive(false);
-    setCodeDetected(false);
-  }, []);
 
   // ── START CAMERA ───────────────────────────────────────────────────────────
   const startCamera = async (mode = "image") => {
