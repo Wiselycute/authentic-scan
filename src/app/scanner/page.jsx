@@ -512,9 +512,7 @@ export default function Scanner({ onScan, onBack }) {
       // Show overlay first so the video element is visible before ZXing touches it.
       setCameraActive(true);
       await new Promise(r => setTimeout(r, 50));
-      // FIX — Bug 1: startCodeScanner is now async; we await it so errors
-      // propagate correctly and startingRef is cleared even on early return.
-      void startCodeScanner(mode);
+      await startCodeScanner(mode);
       return;
     }
 
@@ -574,31 +572,12 @@ export default function Scanner({ onScan, onBack }) {
   };
 
   // ── QR / BARCODE SCANNER ───────────────────────────────────────────────────
-  // FIX — Bug 1: converted to async so we can await a readyState poll before
-  // ZXing starts decoding. Without this, ZXing decodes a zero-dimension or
-  // all-black frame on slow Android devices, causing silent failures or a
-  // black camera preview.
   const startCodeScanner = async (mode) => {
     if (!videoRef.current) { startingRef.current = false; return; }
     if (!navigator?.mediaDevices?.getUserMedia) {
       handleCameraError({ name: "NotSupportedError" });
       return;
     }
-
-    // FIX — Bug 1: poll until the video element has received at least one real
-    // frame from the camera before handing it to ZXing. readyState >= 2 means
-    // the browser has enough data to render the current frame (HAVE_CURRENT_DATA).
-    // This is the root cause of the Android black-screen issue.
-    await new Promise((resolve) => {
-      const check = () => {
-        if (!mountedRef.current) return resolve(); // component unmounted, bail
-        if (videoRef.current && videoRef.current.readyState >= 2) return resolve();
-        requestAnimationFrame(check);
-      };
-      requestAnimationFrame(check);
-    });
-
-    if (!mountedRef.current) { startingRef.current = false; return; }
 
     const hints = new Map();
     hints.set(
