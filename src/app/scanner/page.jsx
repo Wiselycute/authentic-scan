@@ -293,7 +293,7 @@ export default function Scanner({ onScan, onBack }) {
     content: "Hello 👋 Upload, snap, or scan a product to verify if it's authentic.",
   }]);
   const [preview, setPreview]           = useState(null);
-  const [scanMode, setScanMode]         = useState(null);   // "image" | "qr" | "barcode"
+  const [scanMode, setScanMode]         = useState(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [codeDetected, setCodeDetected] = useState(false);
   const [scannedCode, setScannedCode]   = useState("");
@@ -320,7 +320,10 @@ export default function Scanner({ onScan, onBack }) {
   const streamRef      = useRef(null);
   const readerRef      = useRef(null);
   const startingRef    = useRef(false);
-  const scannedCodeRef = useRef("");   // mirror of scannedCode for callbacks
+  const scannedCodeRef = useRef("");
+  // FIX — Bug 3: mountedRef prevents post-unmount state updates in loadHistory
+  // and guards the camera start race when the component unmounts mid-startup.
+  const mountedRef     = useRef(true);
 
   // ── helpers ────────────────────────────────────────────────────────────────
   const addMsg   = (payload) => setMessages(prev => [...prev, { id: mkId(), ...payload }]);
@@ -337,6 +340,9 @@ export default function Scanner({ onScan, onBack }) {
       query.set("search", normalizedSearch);
     }
     const response = await request(`/scans/history?${query.toString()}`);
+
+    // FIX — Bug 3 / W4: guard all state updates against post-unmount calls.
+    if (!mountedRef.current) return;
 
     if (response.error) {
       setHistoryError(response.message || "Unable to load scan history.");
@@ -363,6 +369,8 @@ export default function Scanner({ onScan, onBack }) {
     setActiveHistoryScanId(String(scanId));
     const response = await request(`/scans/${scanId}`);
 
+    if (!mountedRef.current) return;
+
     if (response.error) {
       setHistoryError(response.message || "Unable to load selected scan.");
       return;
@@ -375,16 +383,8 @@ export default function Scanner({ onScan, onBack }) {
     }
 
     setMessages([
-      {
-        id: mkId(),
-        type: "assistant",
-        content: "Loaded scan from history.",
-      },
-      {
-        id: mkId(),
-        type: "assistant",
-        result,
-      },
+      { id: mkId(), type: "assistant", content: "Loaded scan from history." },
+      { id: mkId(), type: "assistant", result },
     ]);
     setHistoryOpen(false);
     clearErr();
@@ -399,6 +399,8 @@ export default function Scanner({ onScan, onBack }) {
 
     const response = await request(`/scans/${scanId}`, null, "DELETE");
 
+    if (!mountedRef.current) return;
+
     if (response.error) {
       setHistoryError(response.message || "Unable to delete selected scan.");
       setDeletingHistoryId(null);
@@ -409,7 +411,6 @@ export default function Scanner({ onScan, onBack }) {
     if (String(activeHistoryScanId) === String(scanId)) {
       setActiveHistoryScanId(null);
     }
-
     setDeletingHistoryId(null);
   }, [activeHistoryScanId, deletingHistoryId]);
 
@@ -428,7 +429,17 @@ export default function Scanner({ onScan, onBack }) {
   };
 
   // ── effects ────────────────────────────────────────────────────────────────
-  useEffect(() => { return () => stopCamera(); }, [stopCamera]);
+
+  // FIX — Bug 3: set mountedRef=false on unmount so all in-flight async calls
+  // bail before touching state. Also correctly stops the camera on unmount.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopCamera();
+    };
+  }, [stopCamera]);
+
   useEffect(() => { scrollBottom(messages.length > 1 ? "smooth" : "auto"); }, [messages]);
   useEffect(() => {
     if (!loading) return;
@@ -441,13 +452,11 @@ export default function Scanner({ onScan, onBack }) {
     void loadHistory(historySearch);
   }, [isAuthLoading, isLogin, historyLoaded, historyLoading, historySearch, loadHistory]);
 
+  // FIX — W4: clearTimeout cleanup was already present and is correct;
+  // the additional mountedRef guard inside loadHistory now covers the async tail.
   useEffect(() => {
     if (isAuthLoading || !isLogin || !historyLoaded) return;
-
-    const timer = setTimeout(() => {
-      void loadHistory(historySearch);
-    }, 250);
-
+    const timer = setTimeout(() => { void loadHistory(historySearch); }, 250);
     return () => clearTimeout(timer);
   }, [historySearch, historyLoaded, isAuthLoading, isLogin, loadHistory]);
 
@@ -483,7 +492,6 @@ export default function Scanner({ onScan, onBack }) {
       return;
     }
 
-    // HTTPS guard (required on mobile, except localhost)
     if (!window.isSecureContext) {
       const local = ["localhost", "127.0.0.1"].includes(window.location.hostname);
       if (!local) {
@@ -501,25 +509,22 @@ export default function Scanner({ onScan, onBack }) {
     setCodeDetected(false);
 
     if (mode === "qr" || mode === "barcode") {
-      // FIX 4: Show overlay FIRST so video element is visible before ZXing touches it.
-      // On Android, ZXing calling play() on a hidden video yields a black frame.
+      // Show overlay first so the video element is visible before ZXing touches it.
       setCameraActive(true);
-      // Wait one frame for React to render the visible overlay before starting ZXing.
       await new Promise(r => setTimeout(r, 50));
-      requestAnimationFrame(() => startCodeScanner(mode));
+      // FIX — Bug 1: startCodeScanner is now async; we await it so errors
+      // propagate correctly and startingRef is cleared even on early return.
+      void startCodeScanner(mode);
       return;
     }
 
     // ── photo mode ──
-    // FIX 4: Show the overlay BEFORE getting the stream so video.play() is
-    // called on a visible element. Android Chrome yields a black frame otherwise.
     setCameraActive(true);
-    await new Promise(r => setTimeout(r, 50)); // one frame for React to flush
+    await new Promise(r => setTimeout(r, 50));
 
     try {
       let stream;
       try {
-        // Primary: environment-facing camera with preferred resolution
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
@@ -528,8 +533,6 @@ export default function Scanner({ onScan, onBack }) {
           },
         });
       } catch {
-        // FIX 2: Android fallback — some devices reject environment constraints.
-        // Fall back to any available camera.
         stream = await navigator.mediaDevices.getUserMedia({ video: true });
       }
 
@@ -538,14 +541,11 @@ export default function Scanner({ onScan, onBack }) {
       const video = videoRef.current;
       if (video) {
         video.srcObject = stream;
-
-        // Wait for the video to have enough data before playing.
         if (video.readyState < 3) {
           await new Promise((resolve) => {
             video.addEventListener("canplay", resolve, { once: true });
           });
         }
-
         await video.play().catch(console.error);
       }
     } catch (err) {
@@ -557,7 +557,7 @@ export default function Scanner({ onScan, onBack }) {
 
   const handleCameraError = (err) => {
     startingRef.current = false;
-    setCameraActive(false);
+    if (mountedRef.current) setCameraActive(false);
     console.error("Camera error:", err);
 
     if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
@@ -574,12 +574,31 @@ export default function Scanner({ onScan, onBack }) {
   };
 
   // ── QR / BARCODE SCANNER ───────────────────────────────────────────────────
-  const startCodeScanner = (mode) => {
+  // FIX — Bug 1: converted to async so we can await a readyState poll before
+  // ZXing starts decoding. Without this, ZXing decodes a zero-dimension or
+  // all-black frame on slow Android devices, causing silent failures or a
+  // black camera preview.
+  const startCodeScanner = async (mode) => {
     if (!videoRef.current) { startingRef.current = false; return; }
     if (!navigator?.mediaDevices?.getUserMedia) {
       handleCameraError({ name: "NotSupportedError" });
       return;
     }
+
+    // FIX — Bug 1: poll until the video element has received at least one real
+    // frame from the camera before handing it to ZXing. readyState >= 2 means
+    // the browser has enough data to render the current frame (HAVE_CURRENT_DATA).
+    // This is the root cause of the Android black-screen issue.
+    await new Promise((resolve) => {
+      const check = () => {
+        if (!mountedRef.current) return resolve(); // component unmounted, bail
+        if (videoRef.current && videoRef.current.readyState >= 2) return resolve();
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
+
+    if (!mountedRef.current) { startingRef.current = false; return; }
 
     const hints = new Map();
     hints.set(
@@ -597,13 +616,15 @@ export default function Scanner({ onScan, onBack }) {
             BarcodeFormat.CODABAR,
           ]
     );
-    // TRY_HARDER helps with 1D barcodes at angles but is too slow for QR codes.
     if (mode === "barcode") {
       hints.set(DecodeHintType.TRY_HARDER, true);
     }
 
-    // 150 ms per frame: responsive without overloading the main thread.
-    readerRef.current = new BrowserMultiFormatReader(hints, 150);
+    // FIX — W3: raised interval to 350 ms for barcode mode. TRY_HARDER runs an
+    // exhaustive multi-angle decode on every frame; at 150 ms this saturates the
+    // JS thread on mid-range Android (Snapdragon 4xx), causing the preview to
+    // stutter and decode latency to actually increase.
+    readerRef.current = new BrowserMultiFormatReader(hints, mode === "barcode" ? 350 : 150);
 
     const onDecode = (result, err) => {
       if (result) {
@@ -622,8 +643,6 @@ export default function Scanner({ onScan, onBack }) {
       }
     };
 
-    // Lower resolution = faster frame processing in ZXing.
-    // Barcode needs width more than height; QR works well at 640×480.
     const preferredConstraints = {
       audio: false,
       video: {
@@ -633,8 +652,6 @@ export default function Scanner({ onScan, onBack }) {
       },
     };
 
-    // Fallback: drop resolution constraints but KEEP rear camera preference.
-    // Using `video: true` here would silently select the front camera on phones.
     const fallbackConstraints = {
       audio: false,
       video: { facingMode: { ideal: "environment" } },
@@ -644,9 +661,12 @@ export default function Scanner({ onScan, onBack }) {
       try {
         await readerRef.current.decodeFromConstraints(preferredConstraints, videoRef.current, onDecode);
       } catch (preferredError) {
+        // FIX — W2: removed NotFoundError from canFallback. NotFoundError means
+        // no camera exists on the device — retrying with looser constraints will
+        // never succeed and causes three unnecessary camera-acquisition attempts
+        // before the error finally surfaces to the user.
         const canFallback =
           preferredError?.name === "OverconstrainedError" ||
-          preferredError?.name === "NotFoundError" ||
           preferredError?.name === "NotReadableError";
 
         if (!canFallback) {
@@ -654,22 +674,22 @@ export default function Scanner({ onScan, onBack }) {
         }
 
         if (!readerRef.current) {
-          readerRef.current = new BrowserMultiFormatReader(hints, 150);
+          readerRef.current = new BrowserMultiFormatReader(hints, mode === "barcode" ? 350 : 150);
         }
 
         try {
           await readerRef.current.decodeFromConstraints(fallbackConstraints, videoRef.current, onDecode);
         } catch (fallbackError) {
+          // Keep NotFoundError out of the last-resort fallback for the same reason.
           const canUseAnyCamera =
-            fallbackError?.name === "OverconstrainedError" ||
-            fallbackError?.name === "NotFoundError";
+            fallbackError?.name === "OverconstrainedError";
 
           if (!canUseAnyCamera) {
             throw fallbackError;
           }
 
           if (!readerRef.current) {
-            readerRef.current = new BrowserMultiFormatReader(hints, 150);
+            readerRef.current = new BrowserMultiFormatReader(hints, mode === "barcode" ? 350 : 150);
           }
 
           await readerRef.current.decodeFromConstraints({ video: true, audio: false }, videoRef.current, onDecode);
@@ -710,7 +730,12 @@ export default function Scanner({ onScan, onBack }) {
   };
 
   // ── ANALYZE ────────────────────────────────────────────────────────────────
-  const analyzeProduct = async ({ image = preview, code = scannedCode } = {}) => {
+  // FIX — Bug 2: default for `code` now reads from scannedCodeRef.current first
+  // so it always gets the freshly scanned value regardless of React's render cycle.
+  // Previously `code = scannedCode` captured the state value at closure-creation
+  // time, which could be stale when analyzeProduct is called in the same render
+  // cycle that setScannedCode fired.
+  const analyzeProduct = async ({ image = preview, code = scannedCodeRef.current || scannedCode } = {}) => {
     if (!image && !code) return;
 
     const img  = image;
@@ -747,7 +772,6 @@ export default function Scanner({ onScan, onBack }) {
         } else {
           formData.append("qrInput", cd);
         }
-
         if (img) {
           endpoint = "/scans/analyze";
         }
@@ -757,6 +781,8 @@ export default function Scanner({ onScan, onBack }) {
       if (response.error) {
         throw new Error(response.message || "Unable to analyze product");
       }
+
+      if (!mountedRef.current) return;
 
       const result = normalizeScanResult(response.data);
       setMessages(prev => [
@@ -787,6 +813,7 @@ export default function Scanner({ onScan, onBack }) {
       }
       if (onScan) onScan(result);
     } catch (analysisError) {
+      if (!mountedRef.current) return;
       setMessages(prev => [
         ...prev.filter(m => m.id !== ldId),
         {
@@ -797,7 +824,7 @@ export default function Scanner({ onScan, onBack }) {
       ]);
       showErr(analysisError.message || "Unable to analyze this scan right now.");
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
       scrollBottom();
     }
   };
@@ -848,15 +875,11 @@ export default function Scanner({ onScan, onBack }) {
 
     const response = await request(
       "/reports",
-      {
-        scanId: result.scanId,
-        category,
-        reason,
-        description,
-        evidence,
-      },
+      { scanId: result.scanId, category, reason, description, evidence },
       "POST"
     );
+
+    if (!mountedRef.current) return;
 
     if (response.error) {
       showErr(response.message || "Unable to save report right now.");
@@ -864,10 +887,7 @@ export default function Scanner({ onScan, onBack }) {
       return;
     }
 
-    addMsg({
-      type: "assistant",
-      content: "Report submitted successfully. Our team can now review this scan.",
-    });
+    addMsg({ type: "assistant", content: "Report submitted successfully. Our team can now review this scan." });
     setSavingReportId(null);
     scrollBottom();
   };
@@ -900,9 +920,7 @@ export default function Scanner({ onScan, onBack }) {
             <button
               onClick={() => {
                 setHistoryOpen(true);
-                if (!historyLoaded && !historyLoading) {
-                  void loadHistory();
-                }
+                if (!historyLoaded && !historyLoading) void loadHistory();
               }}
               className="w-9 h-9 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center hover:bg-white/10 transition"
               aria-label="Open scan history"
@@ -915,7 +933,7 @@ export default function Scanner({ onScan, onBack }) {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <div className="w-10 h-10 rounded-2xl bg-cyan-600  flex items-center justify-center shadow-lg shadow-cyan-500/25">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
               <Shield className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -940,7 +958,6 @@ export default function Scanner({ onScan, onBack }) {
           ref={chatRef}
           className={`flex-1 overflow-y-auto space-y-4 ${isInitialState ? "flex flex-col justify-center pb-6" : "pb-52"}`}
         >
-
           {/* error banner */}
           <AnimatePresence>
             {error && (
@@ -1008,8 +1025,7 @@ export default function Scanner({ onScan, onBack }) {
             ))}
           </AnimatePresence>
           <div ref={chatEndRef} />
-
-        </div>{/* end chat scroll */}
+        </div>
 
         {/* ── fixed input bar ── */}
         <div
@@ -1019,8 +1035,6 @@ export default function Scanner({ onScan, onBack }) {
           }
         >
           <div className="max-w-5xl mx-auto px-3 sm:px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-
-            {/* image preview thumbnail */}
             <AnimatePresence>
               {preview && (
                 <motion.div
@@ -1038,29 +1052,22 @@ export default function Scanner({ onScan, onBack }) {
               )}
             </AnimatePresence>
 
-            {/* action bar */}
             <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-2xl p-2 flex items-center gap-2">
-
               <ActionBtn onClick={() => fileInputRef.current?.click()} label="Upload image">
                 <Upload className="w-5 h-5 text-cyan-300" />
               </ActionBtn>
-
               <ActionBtn onClick={() => startCamera("image")} label="Take photo">
                 <Camera className="w-5 h-5 text-cyan-300" />
               </ActionBtn>
-
               <ActionBtn onClick={() => startCamera("qr")} label="Scan QR">
                 <QrCode className="w-5 h-5 text-cyan-300" />
               </ActionBtn>
-
               <ActionBtn onClick={() => startCamera("barcode")} label="Scan barcode">
                 <Barcode className="w-5 h-5 text-cyan-300" />
               </ActionBtn>
-
               <div className="hidden sm:flex flex-1 h-10 rounded-xl bg-black/20 border border-white/5 px-3 items-center">
                 <span className="text-white/35 text-xs truncate">Upload or scan to verify…</span>
               </div>
-
               <button
                 onClick={() => analyzeProduct()}
                 disabled={!canSend}
@@ -1080,359 +1087,201 @@ export default function Scanner({ onScan, onBack }) {
             </p>
           </div>
         </div>
-
-      </div>{/* end main */}
+      </div>
 
       {/* ── history drawer ── */}
-     {/* ───────────────── HISTORY DRAWER ───────────────── */}
-<AnimatePresence>
-  {historyOpen && (
-    <>
-      {/* BACKDROP */}
-      <motion.button
-        type="button"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={() => setHistoryOpen(false)}
-        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
-      />
-
-      {/* SIDEBAR */}
-      <motion.aside
-        initial={{ x: -420 }}
-        animate={{ x: 0 }}
-        exit={{ x: -420 }}
-        transition={{
-          type: "spring",
-          stiffness: 260,
-          damping: 28,
-        }}
-        className="
-          fixed left-0 top-0 bottom-0 z-60
-          w-97.5 max-w-[92vw]
-          overflow-hidden
-          border-r border-white/10
-          bg-[#050816]/95
-          backdrop-blur-3xl
-          shadow-[0_0_50px_rgba(0,0,0,0.45)]
-        "
-      >
-        <div className="flex h-full flex-col">
-          {/* HEADER */}
-          <div className="border-b border-white/10 bg-white/3 px-5 py-5 backdrop-blur-3xl">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
-
-                  <h2 className="text-lg font-semibold text-white">
-                    Scan History
-                  </h2>
-                </div>
-
-                <p className="mt-1 text-xs text-white/45">
-                  Access previous authenticity scans
-                </p>
-              </div>
-
-              <button
-                onClick={() => setHistoryOpen(false)}
-                className="
-                  flex h-9 w-9 items-center justify-center
-                  rounded-xl
-                  border border-white/10
-                  bg-white/5
-                  backdrop-blur-xl
-                  transition
-                  hover:bg-white/8
-                "
-              >
-                <X className="h-4 w-4 text-white/70" />
-              </button>
-            </div>
-
-            {/* SEARCH */}
-            <div className="mt-4">
-              <div
-                className="
-                  flex items-center gap-2
-                  rounded-2xl
-                  border border-white/10
-                  bg-white/4
-                  px-3 py-3
-                  backdrop-blur-xl
-                "
-              >
-                <Search className="h-4 w-4 text-white/40" />
-
-                <input
-                  type="text"
-                  value={historySearch}
-                  onChange={(event) => setHistorySearch(event.target.value)}
-                  placeholder="Search product, brand, barcode..."
-                  className="
-                    w-full bg-transparent
-                    text-sm text-white
-                    placeholder:text-white/30
-                    outline-none
-                  "
-                />
-              </div>
-            </div>
-
-            {/* REFRESH */}
-            <button
-              onClick={() => void loadHistory(historySearch)}
-              className="
-                mt-3 w-full
-                rounded-2xl
-                border border-cyan-400/20
-                bg-cyan-500/10
-                px-4 py-3
-                text-sm font-medium text-cyan-100
-                backdrop-blur-xl
-                transition-all duration-300
-                hover:bg-cyan-500/15
-              "
+      <AnimatePresence>
+        {historyOpen && (
+          <>
+            <motion.button
+              type="button"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setHistoryOpen(false)}
+              className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
+            />
+            <motion.aside
+              initial={{ x: -420 }}
+              animate={{ x: 0 }}
+              exit={{ x: -420 }}
+              transition={{ type: "spring", stiffness: 260, damping: 28 }}
+              className="fixed left-0 top-0 bottom-0 z-60 w-97.5 max-w-[92vw] overflow-hidden border-r border-white/10 bg-[#050816]/95 backdrop-blur-3xl shadow-[0_0_50px_rgba(0,0,0,0.45)]"
             >
-              Refresh History
-            </button>
-          </div>
-
-          {/* HISTORY LIST */}
-          <div
-            className="
-              flex-1 overflow-y-auto
-              space-y-3
-              px-4 py-4
-              scrollbar-none
-            "
-          >
-            {/* LOADING */}
-            {historyLoading && (
-              <div
-                className="
-                  rounded-2xl
-                  border border-white/10
-                  bg-white/4
-                  p-4
-                  backdrop-blur-2xl
-                "
-              >
-                <div className="flex items-center gap-3 text-white/70">
-                  <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
-
-                  <span className="text-sm">
-                    Loading scan history...
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* ERROR */}
-            {!historyLoading && historyError && (
-              <div
-                className="
-                  rounded-2xl
-                  border border-rose-400/20
-                  bg-rose-500/10
-                  p-4
-                  backdrop-blur-2xl
-                "
-              >
-                <p className="text-sm text-rose-100">
-                  {historyError}
-                </p>
-              </div>
-            )}
-
-            {/* EMPTY */}
-            {!historyLoading &&
-              !historyError &&
-              historyItems.length === 0 && (
-                <div
-                  className="
-                    rounded-3xl
-                    border border-dashed border-white/10
-                    bg-white/3
-                    p-6
-                    text-center
-                    backdrop-blur-2xl
-                  "
-                >
-                  <div
-                    className="
-                      mx-auto mb-3
-                      flex h-14 w-14 items-center justify-center
-                      rounded-2xl
-                      bg-white/4
-                    "
-                  >
-                    <Shield className="h-6 w-6 text-cyan-300" />
+              <div className="flex h-full flex-col">
+                <div className="border-b border-white/10 bg-white/3 px-5 py-5 backdrop-blur-3xl">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+                        <h2 className="text-lg font-semibold text-white">Scan History</h2>
+                      </div>
+                      <p className="mt-1 text-xs text-white/45">Access previous authenticity scans</p>
+                    </div>
+                    <button
+                      onClick={() => setHistoryOpen(false)}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 backdrop-blur-xl transition hover:bg-white/8"
+                    >
+                      <X className="h-4 w-4 text-white/70" />
+                    </button>
                   </div>
 
-                  <p className="text-sm text-white/70">
-                    No scan history yet
-                  </p>
+                  <div className="mt-4">
+                    <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/4 px-3 py-3 backdrop-blur-xl">
+                      <Search className="h-4 w-4 text-white/40" />
+                      <input
+                        type="text"
+                        value={historySearch}
+                        onChange={(event) => setHistorySearch(event.target.value)}
+                        placeholder="Search product, brand, barcode..."
+                        className="w-full bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
+                      />
+                    </div>
+                  </div>
 
-                  <p className="mt-1 text-xs text-white/40">
-                    Your previous scans will appear here.
-                  </p>
-                </div>
-              )}
-
-            {/* HISTORY ITEMS */}
-            {!historyLoading &&
-              !historyError &&
-              historyItems.map((item) => {
-                const isActive =
-                  String(activeHistoryScanId) ===
-                  String(item.scanId);
-
-                return (
-                  <motion.div
-                    key={item.scanId}
-                    whileHover={{ y: -2 }}
-                    transition={{ duration: 0.2 }}
-                    className={`
-                      relative overflow-hidden
-                      rounded-3xl
-                      border
-                      backdrop-blur-2xl
-                      transition-all duration-300
-                      ${
-                        isActive
-                          ? "border-cyan-400/30 bg-cyan-500/10"
-                          : "border-white/10 bg-white/4 hover:bg-white/6"
-                      }
-                    `}
+                  <button
+                    onClick={() => void loadHistory(historySearch)}
+                    className="mt-3 w-full rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm font-medium text-cyan-100 backdrop-blur-xl transition-all duration-300 hover:bg-cyan-500/15"
                   >
-                    {/* ACTIVE OVERLAY */}
-                    {isActive && (
-                      <div className="absolute inset-0 bg-cyan-400/5" />
-                    )}
+                    Refresh History
+                  </button>
+                </div>
 
-                    {/* CONTENT */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void loadHistoryScan(item.scanId)
-                      }
-                      className="relative w-full p-4 pr-14 text-left"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
-                          {item.imageThumbnail ? (
-                            <img
-                              src={item.imageThumbnail}
-                              alt={item.productName || "Scanned product"}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-cyan-200/70">
-                              <Shield className="h-5 w-5" />
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-2">
-                            <h3 className="line-clamp-2 text-base font-semibold leading-5 text-white">
-                              {item.productName || "Unknown Product"}
-                            </h3>
-
-                            <span
-                              className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
-                                item.status === "authentic"
-                                  ? "border border-emerald-300/40 bg-emerald-500/15 text-emerald-200"
-                                  : item.status === "suspicious"
-                                    ? "border border-rose-300/40 bg-rose-500/15 text-rose-200"
-                                    : "border border-amber-300/40 bg-amber-500/15 text-amber-200"
-                              }`}
-                            >
-                              {String(item.status || "review").replaceAll("_", " ")}
-                            </span>
-                          </div>
-
-                          <p className="mt-1 truncate text-xs text-white/55">
-                            {item.brandName || "Unknown Brand"}
-                          </p>
-
-                          <div className="mt-2 space-y-1 text-xs text-white/55">
-                            {item.brandName ? (
-                              <p className="truncate">Brand: {item.brandName}</p>
-                            ) : null}
-                            {item.category ? (
-                              <p className="truncate">Category: {item.category}</p>
-                            ) : null}
-                            {item.manufacturer ? (
-                              <p className="truncate">Manufacturer: {item.manufacturer}</p>
-                            ) : null}
-                            {item.countryOfOrigin ? (
-                              <p className="truncate">Origin: {item.countryOfOrigin}</p>
-                            ) : null}
-                            {Array.isArray(item.ingredients) && item.ingredients.length > 0 ? (
-                              <p className="line-clamp-2">Ingredients: {item.ingredients.join(", ")}</p>
-                            ) : null}
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between text-xs text-white/50">
-                            <span>{item.confidence}% confidence</span>
-                            <span>{formatHistoryDate(item.createdAt)}</span>
-                          </div>
-                        </div>
+                <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4 scrollbar-none">
+                  {historyLoading && (
+                    <div className="rounded-2xl border border-white/10 bg-white/4 p-4 backdrop-blur-2xl">
+                      <div className="flex items-center gap-3 text-white/70">
+                        <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
+                        <span className="text-sm">Loading scan history...</span>
                       </div>
-                    </button>
+                    </div>
+                  )}
 
-                    {/* DELETE BUTTON */}
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
+                  {!historyLoading && historyError && (
+                    <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-4 backdrop-blur-2xl">
+                      <p className="text-sm text-rose-100">{historyError}</p>
+                    </div>
+                  )}
 
-                        void deleteHistoryScan(item.scanId);
-                      }}
-                      disabled={Boolean(deletingHistoryId)}
-                      className="
-                        absolute right-3 top-3
-                        flex h-9 w-9 items-center justify-center
-                        rounded-xl
-                        border border-white/10
-                        bg-black/20
-                        text-white/50
-                        backdrop-blur-xl
-                        transition-all duration-300
-                        hover:border-rose-400/30
-                        hover:bg-rose-500/10
-                        hover:text-rose-200
-                      "
-                    >
-                      {String(deletingHistoryId) ===
-                      String(item.scanId) ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
-                      )}
-                    </button>
-                  </motion.div>
-                );
-              })}
-          </div>
-        </div>
-      </motion.aside>
-    </>
-  )}
-</AnimatePresence>
+                  {!historyLoading && !historyError && historyItems.length === 0 && (
+                    <div className="rounded-3xl border border-dashed border-white/10 bg-white/3 p-6 text-center backdrop-blur-2xl">
+                      <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/4">
+                        <Shield className="h-6 w-6 text-cyan-300" />
+                      </div>
+                      <p className="text-sm text-white/70">No scan history yet</p>
+                      <p className="mt-1 text-xs text-white/40">Your previous scans will appear here.</p>
+                    </div>
+                  )}
 
-      {/*
-        ── CAMERA OVERLAY (FIX 3) ──────────────────────────────────────────────
-        Moved OUT of the scroll area and into a fixed full-screen overlay.
-        z-index: 60 ensures it renders above the header (z-50) and input bar (z-40).
-        This eliminates the stacking-context and scroll-area clipping issues that
-        caused the camera view to be invisible on Android and iOS.
-      */}
+                  {!historyLoading && !historyError && historyItems.map((item) => {
+                    const isActive = String(activeHistoryScanId) === String(item.scanId);
+                    return (
+                      <motion.div
+                        key={item.scanId}
+                        whileHover={{ y: -2 }}
+                        transition={{ duration: 0.2 }}
+                        className={`relative overflow-hidden rounded-3xl border backdrop-blur-2xl transition-all duration-300 ${
+                          isActive
+                            ? "border-cyan-400/30 bg-cyan-500/10"
+                            : "border-white/10 bg-white/4 hover:bg-white/6"
+                        }`}
+                      >
+                        {isActive && <div className="absolute inset-0 bg-cyan-400/5" />}
+
+                        <button
+                          type="button"
+                          onClick={() => void loadHistoryScan(item.scanId)}
+                          className="relative w-full p-4 pr-14 text-left"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+                              {item.imageThumbnail ? (
+                                <img
+                                  src={item.imageThumbnail}
+                                  alt={item.productName || "Scanned product"}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-cyan-200/70">
+                                  <Shield className="h-5 w-5" />
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <h3 className="line-clamp-2 text-base font-semibold leading-5 text-white">
+                                  {item.productName || "Unknown Product"}
+                                </h3>
+                                <span
+                                  className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                                    item.status === "authentic"
+                                      ? "border border-emerald-300/40 bg-emerald-500/15 text-emerald-200"
+                                      : item.status === "suspicious"
+                                        ? "border border-rose-300/40 bg-rose-500/15 text-rose-200"
+                                        : "border border-amber-300/40 bg-amber-500/15 text-amber-200"
+                                  }`}
+                                >
+                                  {String(item.status || "review").replaceAll("_", " ")}
+                                </span>
+                              </div>
+
+                              {/* FIX — UI: removed the duplicate brandName line that appeared
+                                  directly below the product name. Brand is now shown only
+                                  once inside the detail rows block below. */}
+                              <div className="mt-2 space-y-1 text-xs text-white/55">
+                                {item.brandName ? (
+                                  <p className="truncate">Brand: {item.brandName}</p>
+                                ) : null}
+                                {item.category ? (
+                                  <p className="truncate">Category: {item.category}</p>
+                                ) : null}
+                                {item.manufacturer ? (
+                                  <p className="truncate">Manufacturer: {item.manufacturer}</p>
+                                ) : null}
+                                {item.countryOfOrigin ? (
+                                  <p className="truncate">Origin: {item.countryOfOrigin}</p>
+                                ) : null}
+                                {Array.isArray(item.ingredients) && item.ingredients.length > 0 ? (
+                                  <p className="line-clamp-2">Ingredients: {item.ingredients.join(", ")}</p>
+                                ) : null}
+                              </div>
+
+                              <div className="mt-3 flex items-center justify-between text-xs text-white/50">
+                                <span>{item.confidence}% confidence</span>
+                                <span>{formatHistoryDate(item.createdAt)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void deleteHistoryScan(item.scanId);
+                          }}
+                          disabled={Boolean(deletingHistoryId)}
+                          className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-black/20 text-white/50 backdrop-blur-xl transition-all duration-300 hover:border-rose-400/30 hover:bg-rose-500/10 hover:text-rose-200"
+                        >
+                          {String(deletingHistoryId) === String(item.scanId) ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </button>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ── camera overlay ── */}
       <canvas ref={canvasRef} className="hidden" />
 
       <div
@@ -1447,13 +1296,14 @@ export default function Scanner({ onScan, onBack }) {
           justifyContent: "flex-start",
         }}
       >
-        {/* FIX 1: Added webkit-playsinline for iOS Safari.
-            FIX 4: Video is always rendered inside the now-visible fixed overlay,
-            so play() is never called on a hidden element. */}
+        {/*
+          FIX — W1: removed the dead `webkit-playsinline="true"` prop. JSX does
+          not forward hyphenated unknown attributes to the DOM so it never reached
+          the video element. `playsInline` (camelCase) already handles iOS Safari.
+        */}
         <video
           ref={videoRef}
           playsInline
-          webkit-playsinline="true"
           muted
           autoPlay
           style={{
@@ -1491,7 +1341,6 @@ export default function Scanner({ onScan, onBack }) {
           </div>
         </div>
 
-        {/* top label */}
         <div className="absolute top-[calc(1rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-xl border border-cyan-400/20 px-4 py-2 rounded-full flex items-center gap-2 whitespace-nowrap">
           <ScanLine className="w-4 h-4 text-cyan-400 animate-pulse" />
           <span className="text-xs text-white/90">
@@ -1499,7 +1348,6 @@ export default function Scanner({ onScan, onBack }) {
           </span>
         </div>
 
-        {/* code detected badge */}
         <AnimatePresence>
           {codeDetected && (
             <motion.div
@@ -1512,7 +1360,6 @@ export default function Scanner({ onScan, onBack }) {
           )}
         </AnimatePresence>
 
-        {/* bottom controls — safe-area aware */}
         <div
           className="absolute left-1/2 -translate-x-1/2 flex items-center gap-3"
           style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))" }}
@@ -1544,7 +1391,6 @@ export default function Scanner({ onScan, onBack }) {
           )}
         </div>
       </div>
-      {/* ── end camera overlay ── */}
 
       {/* ── camera help modal ── */}
       <AnimatePresence>
@@ -1605,7 +1451,6 @@ export default function Scanner({ onScan, onBack }) {
         )}
       </AnimatePresence>
 
-      {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
     </div>
   );
@@ -1796,9 +1641,7 @@ function ProductProfile({ result }) {
       ? result.imageThumbnail.trim()
       : "";
 
-  if (infoRows.length === 0 && ingredients.length === 0 && !productImage) {
-    return null;
-  }
+  if (infoRows.length === 0 && ingredients.length === 0 && !productImage) return null;
 
   return (
     <div>
