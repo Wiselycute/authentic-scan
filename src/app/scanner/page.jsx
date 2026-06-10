@@ -1467,7 +1467,7 @@ export default function Scanner({ onScan, onBack }) {
         )}
       </AnimatePresence>
 
-      <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
     </div>
   );
 }
