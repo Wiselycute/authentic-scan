@@ -18,6 +18,7 @@ import {
   Legend,
 } from 'recharts';
 
+import { useAuth } from '@/utils/contexts/AuthContext';
 import {
   TrendingUp,
   Shield,
@@ -31,6 +32,7 @@ import {
   Tag,
   Flag,
   ChevronRight,
+  LogOut,
 } from 'lucide-react';
 
 import { getAdminAnalytics } from '@/app/api/services/admin.service';
@@ -112,9 +114,22 @@ const getEmptyDetectionData = () => {
 };
 
 export function AdminDashboard({ onBack }) {
+  const router = useRouter();
+  const { user, logout } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [analytics, setAnalytics] = useState(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  const userName = user?.fullName || user?.name || user?.username || user?.email || 'Admin';
+  const userInitial = userName.trim().charAt(0).toUpperCase() || 'A';
+  const userRole = String(user?.role || 'Admin').toLowerCase();
+  const userEmail = user?.email || '';
+
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
 
   const loadAnalytics = async () => {
     setIsLoading(true);
@@ -329,7 +344,7 @@ export function AdminDashboard({ onBack }) {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 relative">
             <button
               onClick={() => {
                 void loadAnalytics();
@@ -341,6 +356,36 @@ export function AdminDashboard({ onBack }) {
             </button>
             <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse" />
             <span className="text-sm text-white/60">Live</span>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setProfileMenuOpen((prev) => !prev)}
+                className="h-11 w-11 rounded-2xl bg-linear-to-br from-cyan-500 to-blue-600 text-white font-semibold flex items-center justify-center shadow-lg shadow-cyan-500/25 hover:scale-105 transition"
+                aria-label="Open profile menu"
+                title={userName}
+              >
+                {userInitial}
+              </button>
+
+              {profileMenuOpen && (
+                <div className="absolute right-0 mt-3 w-56 rounded-3xl border border-white/10 bg-[#0b1229]/95 p-3 shadow-2xl backdrop-blur-xl z-50">
+                  <div className="space-y-1 border-b border-white/10 pb-3 mb-3">
+                    <p className="text-sm font-semibold text-white truncate">{userName}</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">{userRole}</p>
+                    {userEmail && <p className="text-[11px] text-white/50 truncate">{userEmail}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="w-full rounded-2xl bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 hover:bg-rose-500/20 transition flex items-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -696,7 +741,7 @@ export function AdminDashboard({ onBack }) {
               const row = (
                 <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_0.8fr_0.7fr_0.8fr_auto] gap-4 items-center p-4 bg-white/5 rounded-xl border border-white/5 hover:border-white/15 hover:bg-white/8 transition-all cursor-pointer group">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-white/10 border border-white/10 flex-shrink-0 flex items-center justify-center">
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-white/10 border border-white/10 shrink-0 flex items-center justify-center">
                       {item.imageUrl ? (
                         <img
                           src={item.imageUrl}
@@ -723,7 +768,7 @@ export function AdminDashboard({ onBack }) {
 
                   <p className="text-xs md:text-right text-white/50">{item.scanDate}</p>
 
-                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50 transition-colors flex-shrink-0 justify-self-end" />
+                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50 transition-colors shrink-0 justify-self-end" />
                 </div>
               );
 

@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Send, Camera, Upload, QrCode, Barcode, Menu,
-  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw, Trash2, Search, Copy, Check,
+  Shield, ScanLine, CheckCircle2, AlertTriangle, Loader2, X, RefreshCw, Trash2, Search, Copy, Check, LogOut,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -277,7 +277,7 @@ const formatHistoryDate = (value) => {
 
 export default function Scanner({ onScan, onBack }) {
   const router = useRouter();
-  const { isLogin, isAuthLoading } = useAuth();
+  const { user, isLogin, isAuthLoading, logout } = useAuth();
 
   useEffect(() => {
     if (isAuthLoading) return;
@@ -310,6 +310,7 @@ export default function Scanner({ onScan, onBack }) {
   const [historySearch, setHistorySearch] = useState("");
   const [activeHistoryScanId, setActiveHistoryScanId] = useState(null);
   const [deletingHistoryId, setDeletingHistoryId] = useState(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   // ── refs ───────────────────────────────────────────────────────────────────
   const videoRef       = useRef(null);
@@ -329,6 +330,12 @@ export default function Scanner({ onScan, onBack }) {
   const addMsg   = (payload) => setMessages(prev => [...prev, { id: mkId(), ...payload }]);
   const showErr  = (msg) => setError(msg);
   const clearErr = () => setError("");
+  
+  const handleLogout = () => {
+    logout();
+    setProfileMenuOpen(false);
+    router.push("/login");
+  };
 
   const loadHistory = useCallback(async (searchValue = "") => {
     setHistoryLoading(true);
@@ -880,6 +887,9 @@ export default function Scanner({ onScan, onBack }) {
     );
   }
 
+  const userName = user?.fullName || user?.name || user?.username || user?.email || "User";
+  const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
+  const userRole = String(user?.role || "User").toLowerCase();
   const canSend = (!!preview || !!scannedCode) && !loading;
   const isInitialState = messages.length === 1 && !preview && !scannedCode && !loading;
 
@@ -922,9 +932,36 @@ export default function Scanner({ onScan, onBack }) {
               <p className="text-[11px] text-white/35 leading-none">AI Product Verification</p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-cyan-400/20 bg-cyan-500/10">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-xs text-cyan-200">Live</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-cyan-400/20 bg-cyan-500/10">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="text-xs text-cyan-200">Live</span>
+            </div>
+            <div className="relative">
+              <button
+                onClick={() => setProfileMenuOpen(prev => !prev)}
+                className="h-10 w-10 rounded-full bg-linear-to-br from-cyan-500 to-blue-600 text-white font-semibold flex items-center justify-center shadow-lg shadow-cyan-500/25 hover:scale-105 transition"
+                aria-label="Open profile menu"
+                title={userName}
+              >
+                {userInitial}
+              </button>
+              {profileMenuOpen && (
+                <div className="absolute right-0 mt-3 w-52 rounded-2xl border border-white/10 bg-[#0b1229]/95 backdrop-blur-xl p-2 shadow-2xl z-50">
+                  <div className="px-3 py-2 border-b border-white/10">
+                    <p className="text-sm text-white font-medium truncate">{userName}</p>
+                    <p className="text-xs text-white/50 capitalize">{userRole}</p>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="mt-1 w-full px-3 py-2.5 rounded-xl text-left text-sm text-rose-200 hover:bg-rose-500/15 transition flex items-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -1353,7 +1390,7 @@ export default function Scanner({ onScan, onBack }) {
           {scanMode === "image" ? (
             <button
               onClick={capturePhoto}
-              className="w-16 h-16 rounded-full bg-linear-to-br from-cyan-400 to-blue-600 border-4 border-white/30 shadow-xl shadow-cyan-500/30 active:scale-95 transition"
+              className="w-16 h-16 rounded-full bg-cyan-400  border-4 border-white/30 shadow-xl shadow-cyan-500/30 active:scale-95 transition"
             />
           ) : (
             <button
@@ -1361,7 +1398,7 @@ export default function Scanner({ onScan, onBack }) {
               disabled={!codeDetected}
               className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition ${
                 codeDetected
-                  ? "bg-linear-to-r from-cyan-500 to-blue-600 shadow-lg shadow-cyan-500/30 active:scale-95 text-white"
+                  ? "bg-linear-cyan-500 shadow-lg shadow-cyan-500/30 active:scale-95 text-white"
                   : "bg-white/10 text-white/30 cursor-not-allowed"
               }`}
             >
@@ -1420,7 +1457,7 @@ export default function Scanner({ onScan, onBack }) {
                 </button>
                 <button
                   onClick={() => setShowHelp(false)}
-                  className="px-4 py-2 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold"
+                  className="px-4 py-2 rounded-xl bg-cyan-500  text-sm font-semibold"
                 >
                   Got it
                 </button>
@@ -1577,9 +1614,9 @@ function ResultCard({ result, onSaveReport, isSaving }) {
             <button
               onClick={onSaveReport}
               disabled={isSaving || !result.scanId}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-linear-to-r from-cyan-500 to-blue-600 text-sm font-semibold hover:opacity-90 transition disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-cyan-500  text-sm font-semibold hover:opacity-90 transition disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isSaving ? "Saving..." : "Save Report"}
+              {isSaving ? "Reporting..." : "Report"}
             </button>
           </div>
         </div>

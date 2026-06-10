@@ -3,34 +3,9 @@ import {
   Shield,
   Mail,
   MapPin,
+  ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
-
-function FacebookIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
-      <path d="M13.5 22v-8.2h2.8l.4-3.2h-3.2V8.6c0-.9.2-1.6 1.6-1.6h1.7V4.1c-.3 0-1.3-.1-2.5-.1-2.4 0-4.1 1.5-4.1 4.2v2.4H8v3.2h2.2V22h3.3z" />
-    </svg>
-  );
-}
-
-function TikTokIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
-      <path d="M16.8 3c.4 1.8 1.5 3 3.2 3.5v3.3c-1.2 0-2.4-.3-3.5-.9v6.4c0 3.4-2.8 6.2-6.2 6.2S4 18.7 4 15.3s2.8-6.2 6.2-6.2c.3 0 .7 0 1 .1v3.5a2.7 2.7 0 0 0-1-.2 2.9 2.9 0 0 0 0 5.8 2.9 2.9 0 0 0 2.9-2.9V3h3.7z" />
-    </svg>
-  );
-}
-
-function InstagramIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" {...props}>
-      <rect x="3" y="3" width="18" height="18" rx="5" ry="5" />
-      <circle cx="12" cy="12" r="4" />
-      <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
 
 export  function Footer() {
   return (
@@ -66,9 +41,9 @@ export  function Footer() {
             {/* Socials */}
             <div className="flex items-center gap-4">
                 {[
-                { icon: FacebookIcon, href: "#" },
-                { icon: TikTokIcon, href: "#" },
-                { icon: InstagramIcon, href: "#" },
+                { icon: ExternalLink, href: "#" },
+                { icon: ExternalLink, href: "#" },
+                { icon: ExternalLink, href: "#" },
               ].map((item, index) => {
                 const Icon = item.icon;
 
