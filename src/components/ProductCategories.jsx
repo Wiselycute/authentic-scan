@@ -167,7 +167,7 @@ export function ProductCategories() {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <button className="px-8 py-4 bg-linear-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-2xl font-semibold transition-all hover:scale-105 shadow-lg shadow-blue-500/25">
+              <button className="px-8 py-4 bg-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-2xl font-semibold transition-all hover:scale-105 shadow-lg shadow-blue-500/25">
                 Request Category
               </button>
 

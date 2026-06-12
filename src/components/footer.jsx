@@ -3,11 +3,40 @@ import {
   Shield,
   Mail,
   MapPin,
-  ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
 
 export  function Footer() {
+  // Simple TikTok-like icon as an inline SVG component
+  const TikTokIcon = (props) => (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M9 8v8.5a3.5 3.5 0 1 0 3.5-3.5V9.5h2.5V6.5a4.5 4.5 0 0 0 4.5 4.5v-3.5a1 1 0 0 0-1-1h-1" />
+    </svg>
+  );
+  // Inline Instagram icon (simple camera glyph)
+  const InstagramIcon = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="5" ry="5" />
+      <path d="M16 11.37A4 4 0 1 1 12.63 8" />
+      <circle cx="17.5" cy="6.5" r="0.5" />
+    </svg>
+  );
+
+  // Inline Facebook icon (simple 'f' glyph)
+  const FacebookIcon = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M18 2h-3a4 4 0 0 0-4 4v3H8v4h3v7h4v-7h3l1-4h-4V6a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
   return (
     <footer className="relative overflow-hidden border-t border-cyan-500/10 ">
     
@@ -40,10 +69,10 @@ export  function Footer() {
 
             {/* Socials */}
             <div className="flex items-center gap-4">
-                {[
-                { icon: ExternalLink, href: "#" },
-                { icon: ExternalLink, href: "#" },
-                { icon: ExternalLink, href: "#" },
+              {[
+                { icon: InstagramIcon, href: "#", label: "Instagram" },
+                { icon: TikTokIcon, href: "#", label: "TikTok" },
+                { icon: FacebookIcon, href: "#", label: "Facebook" },
               ].map((item, index) => {
                 const Icon = item.icon;
 
@@ -51,6 +80,7 @@ export  function Footer() {
                   <a
                     key={index}
                     href={item.href}
+                    aria-label={item.label}
                     className="group flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-500/20 bg-cyan-500/5 text-slate-400 transition-all duration-300 hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-cyan-300 hover:shadow-[0_0_15px_rgba(34,211,238,0.4)]"
                   >
                     <Icon className="w-5 h-5" />
